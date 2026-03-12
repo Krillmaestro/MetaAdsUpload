@@ -1,6 +1,5 @@
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
-import bcrypt from "bcryptjs";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   trustHost: true,
@@ -18,14 +17,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         if (!email || !password) return null;
 
         const validEmail = process.env.AUTH_EMAIL || "admin@apotekhunden.se";
-        // Default password hash for "admin123" - change in production
-        const validHash = process.env.AUTH_PASSWORD_HASH ||
-          "$2b$10$UOqNpmeHDbe74wN64bZgoO2BqQAuu4vsq56BQOqUwUBdDoznXSeHG";
+        const validPassword = process.env.AUTH_PASSWORD || "admin123";
 
-        if (email !== validEmail) return null;
-
-        const isValid = await bcrypt.compare(password, validHash);
-        if (!isValid) return null;
+        if (email !== validEmail || password !== validPassword) return null;
 
         return { id: "1", email, name: "Admin" };
       },
