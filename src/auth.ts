@@ -20,7 +20,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         const validEmail = process.env.AUTH_EMAIL || "admin@apotekhunden.se";
         // Default password hash for "admin123" - change in production
         const validHash = process.env.AUTH_PASSWORD_HASH ||
-          "$2a$10$K7L1OJ45/4Y2nIvhRVpCe.FSmhDdWoXehVzJptJ/op0lLfFgCt3Ky";
+          "$2b$10$UOqNpmeHDbe74wN64bZgoO2BqQAuu4vsq56BQOqUwUBdDoznXSeHG";
 
         if (email !== validEmail) return null;
 
