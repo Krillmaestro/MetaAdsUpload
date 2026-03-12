@@ -1,12 +1,1 @@
-{
-  "crons": [
-    {
-      "path": "/api/cron/sync-insights",
-      "schedule": "0 */6 * * *"
-    },
-    {
-      "path": "/api/cron/run-rules",
-      "schedule": "*/30 * * * *"
-    }
-  ]
-}
+{}
