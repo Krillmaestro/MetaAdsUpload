@@ -3,6 +3,7 @@ import Credentials from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
+  trustHost: true,
   providers: [
     Credentials({
       name: "credentials",
@@ -35,5 +36,18 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   },
   session: {
     strategy: "jwt",
+  },
+  callbacks: {
+    authorized({ auth: session, request }) {
+      const isLoggedIn = !!session?.user;
+      const isOnLogin = request.nextUrl.pathname.startsWith("/login");
+      const isAuthApi = request.nextUrl.pathname.startsWith("/api/auth");
+
+      if (isAuthApi) return true;
+      if (isOnLogin) return true;
+      if (isLoggedIn) return true;
+
+      return Response.redirect(new URL("/login", request.nextUrl.origin));
+    },
   },
 });
