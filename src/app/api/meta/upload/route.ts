@@ -32,8 +32,8 @@ export async function POST(request: NextRequest) {
     }
 
     // Step 2: Create Ad Creative
-    const pageId = process.env.META_PAGE_ID;
-    if (!pageId) throw new Error("META_PAGE_ID not configured");
+    const { getPageId, getPixelId } = await import("@/lib/meta/client");
+    const pageId = await getPageId();
 
     const creativePayload: Record<string, unknown> = {
       name: adConfig.name || "Ad Creative",
@@ -85,7 +85,7 @@ export async function POST(request: NextRequest) {
     });
 
     // Step 4: Create Ad Set
-    const pixelId = process.env.META_PIXEL_ID;
+    const pixelId = await getPixelId();
     const adset = await createAdSet({
       campaign_id: campaign.id,
       name: adsetConfig.name,

@@ -5,7 +5,7 @@ export async function uploadImage(imageFile: Buffer, filename: string) {
   form.append("filename", filename);
   form.append("bytes", new Blob([new Uint8Array(imageFile)]), filename);
   return metaApi<{ images: Record<string, { hash: string }> }>(
-    `/${getAdAccountId()}/adimages`,
+    `/${await getAdAccountId()}/adimages`,
     { method: "POST", body: form }
   );
 }
@@ -15,7 +15,7 @@ export async function uploadVideo(videoFile: Buffer, filename: string) {
   form.append("title", filename);
   form.append("source", new Blob([new Uint8Array(videoFile)]), filename);
   return metaApi<{ id: string }>(
-    `/${getAdAccountId()}/advideos`,
+    `/${await getAdAccountId()}/advideos`,
     { method: "POST", body: form }
   );
 }
@@ -56,7 +56,7 @@ export async function createAdCreative(params: {
     };
   };
 }) {
-  return metaApi<{ id: string }>(`/${getAdAccountId()}/adcreatives`, {
+  return metaApi<{ id: string }>(`/${await getAdAccountId()}/adcreatives`, {
     method: "POST",
     body: params,
   });

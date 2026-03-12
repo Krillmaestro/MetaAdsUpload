@@ -19,7 +19,7 @@ const CAMPAIGN_FIELDS = "id,name,status,objective,daily_budget,lifetime_budget,b
 
 export async function getCampaigns(limit = 100) {
   const data = await metaApi<{ data: Campaign[] }>(
-    `/${getAdAccountId()}/campaigns`,
+    `/${await getAdAccountId()}/campaigns`,
     { params: { fields: CAMPAIGN_FIELDS, limit } }
   );
   return data.data;
@@ -33,7 +33,7 @@ export async function createCampaign(params: {
   special_ad_categories?: string[];
 }) {
   return metaApi<{ id: string }>(
-    `/${getAdAccountId()}/campaigns`,
+    `/${await getAdAccountId()}/campaigns`,
     {
       method: "POST",
       body: {

@@ -9,6 +9,7 @@ const pageTitles: Record<string, string> = {
   "/creatives": "Creative Library",
   "/campaigns": "Campaigns",
   "/rules": "Automation Rules",
+  "/settings": "Settings",
 };
 
 export function Header() {

@@ -145,3 +145,19 @@ export const uploadJobs = pgTable("upload_jobs", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
   completedAt: timestamp("completed_at"),
 });
+
+export const metaConnections = pgTable("meta_connections", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(), // e.g. "ApotekHunden"
+  accessToken: text("access_token").notNull(),
+  tokenExpiresAt: timestamp("token_expires_at"),
+  facebookUserId: text("facebook_user_id"),
+  adAccounts: jsonb("ad_accounts").$type<Array<{ id: string; name: string; currency: string; status: number }>>().default([]),
+  activeAdAccountId: text("active_ad_account_id"),
+  pages: jsonb("pages").$type<Array<{ id: string; name: string }>>().default([]),
+  activePageId: text("active_page_id"),
+  pixelId: text("pixel_id"),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});

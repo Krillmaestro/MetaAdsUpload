@@ -20,7 +20,7 @@ const ADSET_FIELDS = "id,campaign_id,name,status,daily_budget,lifetime_budget,ta
 export async function getAdSets(campaignId?: string, limit = 100) {
   const endpoint = campaignId
     ? `/${campaignId}/adsets`
-    : `/${getAdAccountId()}/adsets`;
+    : `/${await getAdAccountId()}/adsets`;
   const data = await metaApi<{ data: AdSet[] }>(endpoint, {
     params: { fields: ADSET_FIELDS, limit },
   });
@@ -40,7 +40,7 @@ export async function createAdSet(params: {
   status?: string;
   promoted_object?: Record<string, unknown>;
 }) {
-  return metaApi<{ id: string }>(`/${getAdAccountId()}/adsets`, {
+  return metaApi<{ id: string }>(`/${await getAdAccountId()}/adsets`, {
     method: "POST",
     body: { ...params, status: params.status || "PAUSED" },
   });

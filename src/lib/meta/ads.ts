@@ -13,7 +13,7 @@ export interface Ad {
 const AD_FIELDS = "id,adset_id,campaign_id,name,status,creative{id},preview_shareable_link";
 
 export async function getAds(adsetId?: string, limit = 100) {
-  const endpoint = adsetId ? `/${adsetId}/ads` : `/${getAdAccountId()}/ads`;
+  const endpoint = adsetId ? `/${adsetId}/ads` : `/${await getAdAccountId()}/ads`;
   const data = await metaApi<{ data: Ad[] }>(endpoint, {
     params: { fields: AD_FIELDS, limit },
   });
@@ -26,7 +26,7 @@ export async function createAd(params: {
   creative: { creative_id: string };
   status?: string;
 }) {
-  return metaApi<{ id: string }>(`/${getAdAccountId()}/ads`, {
+  return metaApi<{ id: string }>(`/${await getAdAccountId()}/ads`, {
     method: "POST",
     body: { ...params, status: params.status || "PAUSED" },
   });

@@ -10,6 +10,7 @@ import {
   Image,
   Megaphone,
   Zap,
+  Settings,
   LogOut,
 } from "lucide-react";
 import { signOut } from "next-auth/react";
@@ -24,6 +25,7 @@ const navItems = [
   { href: "/creatives", label: "Creatives", icon: Image },
   { href: "/campaigns", label: "Campaigns", icon: Megaphone },
   { href: "/rules", label: "Rules", icon: Zap },
+  { href: "/settings", label: "Settings", icon: Settings },
 ];
 
 export function Sidebar() {
