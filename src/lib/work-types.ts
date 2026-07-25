@@ -151,8 +151,7 @@ export function byBrand(sessions: WorkSession[]): Slice[] {
   return toSlices(map);
 }
 
-export function byPerson(sessions: WorkSession[]): Slice[] {
-  const palette = ["#22d3ee", "#f472b6", "#facc15", "#4ade80"];
+export function byPerson(sessions: WorkSession[], palette: string[]): Slice[] {
   const map = new Map<string, Omit<Slice, "share">>();
   for (const s of sessions) {
     const current = map.get(s.userId) ?? {
@@ -189,39 +188,195 @@ export function groupByDay(sessions: WorkSession[]): { key: string; sessions: Wo
     .sort((a, b) => (a.key < b.key ? 1 : -1));
 }
 
-/** One row per day in the range, each with hours per category — feeds the stacked chart. */
-export function dailySeries(
+// ── Time bucketing (day / week / month) ──────────────────────────────────────
+
+export type Bucket = "day" | "week" | "month";
+
+/** Monday of the week `date` falls in. */
+export function weekStart(date: Date): Date {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  return d;
+}
+
+/** ISO week number — what "v. 31" means to a Swede. */
+export function isoWeek(date: Date): number {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return Math.ceil(((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+}
+
+export function bucketStart(date: Date, bucket: Bucket): Date {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  if (bucket === "week") return weekStart(d);
+  if (bucket === "month") return new Date(d.getFullYear(), d.getMonth(), 1);
+  return d;
+}
+
+export function bucketKey(date: Date, bucket: Bucket): string {
+  return dayKey(bucketStart(date, bucket));
+}
+
+export function bucketLabel(date: Date, bucket: Bucket): string {
+  if (bucket === "week") return `v.${isoWeek(date)}`;
+  if (bucket === "month") return date.toLocaleDateString("sv-SE", { month: "short" });
+  return date.toLocaleDateString("sv-SE", { day: "numeric", month: "short" });
+}
+
+/** Full label for tooltips — the axis tick is abbreviated, the tooltip is not. */
+export function bucketFullLabel(date: Date, bucket: Bucket): string {
+  if (bucket === "week") {
+    const end = new Date(date);
+    end.setDate(end.getDate() + 6);
+    return `Vecka ${isoWeek(date)} · ${date.toLocaleDateString("sv-SE", { day: "numeric", month: "short" })}–${end.toLocaleDateString("sv-SE", { day: "numeric", month: "short" })}`;
+  }
+  if (bucket === "month") return date.toLocaleDateString("sv-SE", { month: "long", year: "numeric" });
+  return date.toLocaleDateString("sv-SE", { weekday: "long", day: "numeric", month: "long" });
+}
+
+function advance(date: Date, bucket: Bucket): void {
+  if (bucket === "month") date.setMonth(date.getMonth() + 1);
+  else date.setDate(date.getDate() + (bucket === "week" ? 7 : 1));
+}
+
+/** Pick a sensible granularity for a range length so buckets stay readable. */
+export function autoBucket(from: Date, to: Date): Bucket {
+  const days = (to.getTime() - from.getTime()) / 86400000;
+  if (days <= 45) return "day";
+  if (days <= 200) return "week"; // a year of weekly bars is 52 columns — too many
+  return "month";
+}
+
+export interface TrendSeries {
+  id: string;
+  name: string;
+  color: string;
+}
+
+export interface TrendData {
+  rows: Record<string, string | number>[];
+  series: TrendSeries[];
+}
+
+/**
+ * One row per bucket, hours per series. Series are the categories present,
+ * with everything past the ceiling folded into a single neutral "Övrigt" —
+ * a chart never carries more hues than the palette can keep distinguishable.
+ */
+export function trendSeries(
   sessions: WorkSession[],
   from: Date,
-  to: Date
-): { rows: Record<string, string | number>[]; categories: { id: string; name: string; color: string }[] } {
-  const categories = byCategory(sessions).map((c) => ({ id: c.id, name: c.name, color: c.color }));
+  to: Date,
+  bucket: Bucket,
+  ceiling: number,
+  otherId: string,
+  otherLabel: string,
+  otherColor: string,
+  rank: (hex: string) => number
+): TrendData {
+  const ranked = byCategory(sessions);
+
+  // Keep the top slice, but never two series wearing the same hue — if a
+  // custom category duplicates a colour, the smaller one folds into "Övrigt".
+  // (Folding, not recolouring: whoever is on screen keeps their own colour.)
+  const kept: Slice[] = [];
+  const usedColors = new Set<string>();
+  const folded = new Set<string>();
+  for (const c of ranked) {
+    const color = c.color.toLowerCase();
+    if (kept.length < ceiling && !usedColors.has(color)) {
+      kept.push(c);
+      usedColors.add(color);
+    } else {
+      folded.add(c.id);
+    }
+  }
+
+  // Stack order follows the palette, not size — so touching segments are the
+  // pairs the palette was validated on, and the order doesn't jump per period.
+  const series: TrendSeries[] = kept
+    .map((c) => ({ id: c.id, name: c.name, color: c.color }))
+    .sort((a, b) => rank(a.color) - rank(b.color));
+  if (folded.size > 0) series.push({ id: otherId, name: otherLabel, color: otherColor });
 
   const rows: Record<string, string | number>[] = [];
-  const cursor = new Date(from);
-  cursor.setHours(0, 0, 0, 0);
-  const end = new Date(Math.min(to.getTime(), Date.now()));
+  const cursor = bucketStart(from, bucket);
+  const end = bucketStart(new Date(Math.min(to.getTime(), Date.now())), bucket);
 
-  // Cap at ~92 buckets so a wide custom range can't melt the chart.
   let guard = 0;
-  while (cursor <= end && guard < 92) {
-    const key = dayKey(cursor);
+  while (cursor <= end && guard < 200) {
     const row: Record<string, string | number> = {
-      day: key,
-      label: cursor.toLocaleDateString("sv-SE", { day: "numeric", month: "short" }),
+      key: dayKey(cursor),
+      label: bucketLabel(cursor, bucket),
+      full: bucketFullLabel(cursor, bucket),
     };
-    for (const c of categories) row[c.id] = 0;
+    for (const s of series) row[s.id] = 0;
     rows.push(row);
-    cursor.setDate(cursor.getDate() + 1);
+    advance(cursor, bucket);
     guard++;
   }
 
-  const index = new Map(rows.map((r) => [r.day as string, r]));
+  const index = new Map(rows.map((r) => [r.key as string, r]));
   for (const s of sessions) {
-    const row = index.get(dayKey(s.startedAt));
+    const row = index.get(bucketKey(new Date(s.startedAt), bucket));
     if (!row) continue;
-    row[s.categoryId] = ((row[s.categoryId] as number) ?? 0) + s.elapsedSeconds / 3600;
+    const id = folded.has(s.categoryId) ? otherId : s.categoryId;
+    if (!(id in row)) continue;
+    row[id] = (row[id] as number) + s.elapsedSeconds / 3600;
   }
 
-  return { rows, categories };
+  return { rows, series };
+}
+
+/** Hours per weekday, Monday-first — "när på veckan går tiden?". */
+export function weekdayPattern(sessions: WorkSession[]): { label: string; hours: number }[] {
+  const labels = ["Mån", "Tis", "Ons", "Tor", "Fre", "Lör", "Sön"];
+  const totals = new Array(7).fill(0);
+  for (const s of sessions) {
+    const weekday = (new Date(s.startedAt).getDay() + 6) % 7;
+    totals[weekday] += s.elapsedSeconds / 3600;
+  }
+  return labels.map((label, i) => ({ label, hours: totals[i] }));
+}
+
+export interface HeatCell {
+  key: string;
+  date: Date;
+  seconds: number;
+}
+
+/** Day cells grouped into Monday-first week columns for the activity map. */
+export function heatmapWeeks(sessions: WorkSession[], from: Date, to: Date, maxWeeks = 27): HeatCell[][] {
+  const perDay = new Map<string, number>();
+  for (const s of sessions) {
+    const key = dayKey(s.startedAt);
+    perDay.set(key, (perDay.get(key) ?? 0) + s.elapsedSeconds);
+  }
+
+  const end = new Date(Math.min(to.getTime(), Date.now()));
+  end.setHours(0, 0, 0, 0);
+  let start = weekStart(from);
+  const earliestAllowed = weekStart(new Date(end.getTime() - (maxWeeks - 1) * 7 * 86400000));
+  if (start < earliestAllowed) start = earliestAllowed;
+
+  const weeks: HeatCell[][] = [];
+  const cursor = new Date(start);
+  while (cursor <= end) {
+    const week: HeatCell[] = [];
+    for (let i = 0; i < 7; i++) {
+      const date = new Date(cursor);
+      date.setDate(date.getDate() + i);
+      const key = dayKey(date);
+      week.push({ key, date, seconds: date > end ? -1 : (perDay.get(key) ?? 0) });
+    }
+    weeks.push(week);
+    cursor.setDate(cursor.getDate() + 7);
+  }
+
+  // Drop leading empty weeks — a wide range shouldn't open with blank columns.
+  while (weeks.length > 1 && weeks[0].every((c) => c.seconds <= 0)) weeks.shift();
+  return weeks;
 }

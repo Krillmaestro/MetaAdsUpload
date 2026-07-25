@@ -7,11 +7,14 @@ import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { WorkTag } from "@/lib/work-types";
+import { PICKABLE_COLORS } from "@/lib/work-palette";
 
-const PALETTE = [
-  "#38bdf8", "#f472b6", "#a78bfa", "#34d399", "#fb923c", "#facc15",
-  "#22d3ee", "#f87171", "#4ade80", "#60a5fa", "#c084fc", "#94a3b8",
-];
+/**
+ * Colours are picked from the validated chart palette, not freely — the eight
+ * slots are the set that stays distinguishable (incl. colour-blindness) on the
+ * dark chart surface. A hand-picked ninth hue breaks that guarantee.
+ */
+const PALETTE = PICKABLE_COLORS.map((s) => s.hex);
 
 /** Manage the category / brand lists without leaving the page. */
 export function TaxonomyDialog({
@@ -130,13 +133,7 @@ function TagList({
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2">
-        <input
-          type="color"
-          value={color}
-          onChange={(e) => setColor(e.target.value)}
-          className="h-9 w-9 shrink-0 cursor-pointer rounded-lg border border-white/10 bg-transparent p-1"
-          aria-label="Färg"
-        />
+        <SwatchPicker value={color} onChange={setColor} />
         <Input
           value={name}
           onChange={(e) => setName(e.target.value)}
@@ -162,12 +159,11 @@ function TagList({
             key={tag.id}
             className={cn("flex items-center gap-2.5 px-3 py-2", !tag.isActive && "opacity-50")}
           >
-            <input
-              type="color"
+            <SwatchPicker
               value={tag.color}
-              onChange={(e) => patch(tag.id, { color: e.target.value })}
-              className="h-5 w-5 shrink-0 cursor-pointer rounded border border-white/10 bg-transparent p-0"
-              aria-label={`Färg för ${tag.name}`}
+              onChange={(hex) => patch(tag.id, { color: hex })}
+              compact
+              label={tag.name}
             />
             <span className="flex-1 truncate text-sm text-slate-200">{tag.name}</span>
             {!tag.isActive && <span className="text-[10px] uppercase text-slate-500">dold</span>}
@@ -198,6 +194,59 @@ function TagList({
       <p className="text-[11px] text-slate-500">
         Dölj hellre än radera — dolda taggar försvinner ur väljaren men historiken behålls.
       </p>
+    </div>
+  );
+}
+
+/** Colour picker limited to the validated palette slots. */
+function SwatchPicker({
+  value,
+  onChange,
+  compact = false,
+  label,
+}: {
+  value: string;
+  onChange: (hex: string) => void;
+  compact?: boolean;
+  label?: string;
+}) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="relative shrink-0">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className={cn(
+          "rounded border border-white/15 transition-transform hover:scale-110",
+          compact ? "h-5 w-5" : "h-9 w-9 rounded-lg"
+        )}
+        style={{ backgroundColor: value }}
+        aria-label={label ? `Färg för ${label}` : "Välj färg"}
+      />
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute left-0 top-full z-20 mt-1 grid grid-cols-4 gap-1 rounded-lg border border-white/10 bg-[#0f1629] p-2 shadow-xl">
+            {PICKABLE_COLORS.map((slot) => (
+              <button
+                key={slot.hex}
+                type="button"
+                onClick={() => {
+                  onChange(slot.hex);
+                  setOpen(false);
+                }}
+                title={slot.name}
+                className={cn(
+                  "h-6 w-6 rounded border transition-transform hover:scale-110",
+                  value.toLowerCase() === slot.hex ? "border-white" : "border-white/10"
+                )}
+                style={{ backgroundColor: slot.hex }}
+              />
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }

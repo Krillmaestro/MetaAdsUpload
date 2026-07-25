@@ -31,7 +31,10 @@ export async function GET(request: NextRequest) {
   if (to) conditions.push(lt(schema.workSessions.startedAt, to));
   if (userId) conditions.push(eq(schema.workSessions.userId, userId));
 
-  const sessions = await fetchSessions(conditions.length ? and(...conditions) : undefined);
+  const requested = Number(searchParams.get("limit"));
+  const limit = Number.isFinite(requested) ? Math.min(Math.max(requested, 1), 5000) : 2000;
+
+  const sessions = await fetchSessions(conditions.length ? and(...conditions) : undefined, limit);
   return NextResponse.json(sessions);
 }
 

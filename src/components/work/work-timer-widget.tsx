@@ -447,15 +447,13 @@ export function WorkTimerWidget() {
   );
 }
 
+/**
+ * Identity comes from the coloured dot beside the text, never from colouring
+ * the text — a light categorical hue is illegible as type on this surface.
+ */
 export function Chip({ color, label }: { color: string | null; label: string }) {
   return (
-    <span
-      className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-[11px] font-medium"
-      style={{
-        color: color ?? "#94a3b8",
-        backgroundColor: `${color ?? "#94a3b8"}1f`,
-      }}
-    >
+    <span className="inline-flex items-center gap-1.5 rounded-md bg-white/[0.06] px-1.5 py-0.5 text-[11px] font-medium text-slate-300">
       <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: color ?? "#94a3b8" }} />
       {label}
     </span>
@@ -506,13 +504,10 @@ export function TagPicker({
               onClick={() => onChange(tag.id)}
               className={cn(
                 "flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors",
-                selected ? "text-white" : "border-white/5 bg-white/[0.03] text-slate-400 hover:text-slate-200"
-              )}
-              style={
                 selected
-                  ? { borderColor: `${tag.color}66`, backgroundColor: `${tag.color}1f`, color: tag.color }
-                  : undefined
-              }
+                  ? "border-white/25 bg-white/10 text-white"
+                  : "border-white/5 bg-white/[0.03] text-slate-400 hover:text-slate-200"
+              )}
             >
               <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: tag.color }} />
               {tag.name}

@@ -1,15 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-} from "recharts";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LabelList } from "recharts";
 import {
   Plus,
   SlidersHorizontal,
@@ -21,6 +13,10 @@ import {
   Gauge,
   Loader2,
   Inbox,
+  ArrowUp,
+  ArrowDown,
+  BarChart3,
+  Table as TableIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Chip } from "@/components/work/work-timer-widget";
@@ -28,33 +24,51 @@ import { WORK_SESSION_EVENT } from "@/components/work/work-timer-widget";
 import { SessionEditorDialog } from "@/components/work/session-editor-dialog";
 import { TaxonomyDialog } from "@/components/work/taxonomy-dialog";
 import {
+  CHART_SURFACE,
+  INK,
+  OTHER_COLOR,
+  OTHER_LABEL,
+  PALETTE_HEXES,
+  SERIES_CEILING,
+  heatColor,
+  paletteRank,
+} from "@/lib/work-palette";
+import {
+  type Bucket,
+  type HeatCell,
+  type Slice,
+  type TrendSeries,
   type WorkSession,
   type WorkTag,
-  type Slice,
+  autoBucket,
   byBrand,
   byCategory,
   byPerson,
-  dailySeries,
   dayKey,
   formatDayLabel,
   formatDuration,
-  formatHours,
   formatTimeOfDay,
   groupByDay,
+  heatmapWeeks,
   startOfDay,
   startOfMonth,
   startOfWeek,
   totalSeconds,
+  trendSeries,
+  weekdayPattern,
 } from "@/lib/work-types";
 
 type Person = { id: string; name: string; email: string };
 
+const OTHER_ID = "__other";
+
 const RANGES = [
-  { key: "today", label: "Idag" },
-  { key: "week", label: "Denna vecka" },
-  { key: "30d", label: "30 dagar" },
-  { key: "month", label: "Denna månad" },
-  { key: "all", label: "Allt" },
+  { key: "today", label: "Idag", compare: "igår" },
+  { key: "week", label: "Denna vecka", compare: "förra veckan" },
+  { key: "month", label: "Denna månad", compare: "förra månaden" },
+  { key: "12w", label: "12 veckor", compare: "föregående 12 v" },
+  { key: "12m", label: "12 månader", compare: "föregående 12 mån" },
+  { key: "all", label: "Allt", compare: null },
 ] as const;
 
 type RangeKey = (typeof RANGES)[number]["key"];
@@ -66,23 +80,40 @@ function rangeBounds(key: RangeKey): { from: Date | null; to: Date | null } {
       return { from: startOfDay(), to: tomorrow };
     case "week":
       return { from: startOfWeek(), to: tomorrow };
-    case "30d":
-      return { from: startOfDay(-29), to: tomorrow };
     case "month":
       return { from: startOfMonth(), to: tomorrow };
+    case "12w":
+      return { from: startOfDay(-83), to: tomorrow };
+    case "12m": {
+      const from = startOfDay();
+      from.setMonth(from.getMonth() - 12);
+      return { from, to: tomorrow };
+    }
     case "all":
       return { from: null, to: null };
   }
 }
 
+/** The equally long window immediately before the current one. */
+function previousBounds(from: Date | null, to: Date | null): { from: Date; to: Date } | null {
+  if (!from || !to) return null;
+  const length = to.getTime() - from.getTime();
+  return { from: new Date(from.getTime() - length), to: new Date(from.getTime()) };
+}
+
 export function TimeDashboard({ currentUserId }: { currentUserId: string }) {
   const [range, setRange] = useState<RangeKey>("week");
   const [personId, setPersonId] = useState<string>("");
+  const [bucket, setBucket] = useState<Bucket | "auto">("auto");
+  const [trendAsTable, setTrendAsTable] = useState(false);
+
   const [sessions, setSessions] = useState<WorkSession[]>([]);
+  const [previous, setPrevious] = useState<WorkSession[]>([]);
   const [categories, setCategories] = useState<WorkTag[]>([]);
   const [brands, setBrands] = useState<WorkTag[]>([]);
   const [people, setPeople] = useState<Person[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [firstLoad, setFirstLoad] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   const [editorOpen, setEditorOpen] = useState(false);
   const [editing, setEditing] = useState<WorkSession | null>(null);
@@ -100,17 +131,30 @@ export function TimeDashboard({ currentUserId }: { currentUserId: string }) {
   }, []);
 
   const loadSessions = useCallback(async () => {
+    setRefreshing(true);
     const { from, to } = rangeBounds(range);
-    const params = new URLSearchParams();
-    if (from) params.set("from", from.toISOString());
-    if (to) params.set("to", to.toISOString());
-    if (personId) params.set("userId", personId);
+    const prev = previousBounds(from, to);
+
+    const query = (a: Date | null, b: Date | null) => {
+      const params = new URLSearchParams({ limit: "5000" });
+      if (a) params.set("from", a.toISOString());
+      if (b) params.set("to", b.toISOString());
+      if (personId) params.set("userId", personId);
+      return `/api/work/sessions?${params}`;
+    };
 
     try {
-      const res = await fetch(`/api/work/sessions?${params}`, { cache: "no-store" });
-      if (res.ok) setSessions((await res.json()) as WorkSession[]);
+      const [current, before] = await Promise.all([
+        fetch(query(from, to), { cache: "no-store" }).then((r) => (r.ok ? r.json() : [])),
+        prev
+          ? fetch(query(prev.from, prev.to), { cache: "no-store" }).then((r) => (r.ok ? r.json() : []))
+          : Promise.resolve([]),
+      ]);
+      setSessions(current as WorkSession[]);
+      setPrevious(before as WorkSession[]);
     } finally {
-      setLoading(false);
+      setFirstLoad(false);
+      setRefreshing(false);
     }
   }, [range, personId]);
 
@@ -119,11 +163,9 @@ export function TimeDashboard({ currentUserId }: { currentUserId: string }) {
   }, [loadTaxonomy]);
 
   useEffect(() => {
-    setLoading(true);
     loadSessions();
   }, [loadSessions]);
 
-  // Live-refresh when the widget starts/stops something.
   useEffect(() => {
     const handler = () => loadSessions();
     window.addEventListener(WORK_SESSION_EVENT, handler);
@@ -133,39 +175,54 @@ export function TimeDashboard({ currentUserId }: { currentUserId: string }) {
   const activeCategories = useMemo(() => categories.filter((c) => c.isActive), [categories]);
   const activeBrands = useMemo(() => brands.filter((b) => b.isActive), [brands]);
 
+  const bounds = rangeBounds(range);
+  const effectiveFrom =
+    bounds.from ??
+    (sessions.length ? new Date(Math.min(...sessions.map((s) => +new Date(s.startedAt)))) : startOfDay(-27));
+  const effectiveTo = bounds.to ?? startOfDay(1);
+  const effectiveBucket: Bucket = bucket === "auto" ? autoBucket(effectiveFrom, effectiveTo) : bucket;
+
   const stats = useMemo(() => {
     const total = totalSeconds(sessions);
     const days = new Set(sessions.map((s) => dayKey(s.startedAt))).size;
+    const prevTotal = totalSeconds(previous);
     return {
       total,
       count: sessions.length,
       avgSession: sessions.length ? total / sessions.length : 0,
       activeDays: days,
       avgDay: days ? total / days : 0,
+      delta: prevTotal > 0 ? (total - prevTotal) / prevTotal : null,
+      prevTotal,
     };
-  }, [sessions]);
+  }, [sessions, previous]);
 
   const categorySlices = useMemo(() => byCategory(sessions), [sessions]);
   const brandSlices = useMemo(() => byBrand(sessions), [sessions]);
-  const personSlices = useMemo(() => byPerson(sessions), [sessions]);
+  const personSlices = useMemo(() => byPerson(sessions, PALETTE_HEXES), [sessions]);
   const days = useMemo(() => groupByDay(sessions), [sessions]);
 
-  // "Allt" can span years — clamp the daily chart to the last 92 days so the
-  // buckets stay readable (the totals above still cover the full range).
-  const CHART_MAX_DAYS = 92;
-  const chart = useMemo(() => {
-    const { from, to } = rangeBounds(range);
-    const earliest = sessions.length
-      ? new Date(Math.min(...sessions.map((s) => +new Date(s.startedAt))))
-      : new Date();
-    const floor = startOfDay(-(CHART_MAX_DAYS - 1));
-    const start = from ?? (earliest > floor ? earliest : floor);
-    return dailySeries(sessions, start, to ?? startOfDay(1));
-  }, [sessions, range]);
+  const trend = useMemo(
+    () =>
+      trendSeries(
+        sessions,
+        effectiveFrom,
+        effectiveTo,
+        effectiveBucket,
+        SERIES_CEILING,
+        OTHER_ID,
+        OTHER_LABEL,
+        OTHER_COLOR,
+        paletteRank
+      ),
+    [sessions, effectiveFrom, effectiveTo, effectiveBucket]
+  );
 
-  const chartClamped =
-    range === "all" &&
-    sessions.some((s) => new Date(s.startedAt) < startOfDay(-(CHART_MAX_DAYS - 1)));
+  const weekdays = useMemo(() => weekdayPattern(sessions), [sessions]);
+  const heat = useMemo(() => heatmapWeeks(sessions, effectiveFrom, effectiveTo), [sessions, effectiveFrom, effectiveTo]);
+  const showHeatmap = (effectiveTo.getTime() - effectiveFrom.getTime()) / 86400000 >= 21;
+
+  const compareLabel = RANGES.find((r) => r.key === range)?.compare ?? null;
 
   function exportCsv() {
     const header = ["Datum", "Start", "Slut", "Timmar", "Person", "Kategori", "Varumärke", "Uppgift", "Kommentar"];
@@ -190,6 +247,14 @@ export function TimeDashboard({ currentUserId }: { currentUserId: string }) {
     a.download = `tid-${range}-${dayKey(new Date())}.csv`;
     a.click();
     URL.revokeObjectURL(url);
+  }
+
+  if (firstLoad) {
+    return (
+      <div className="flex items-center justify-center py-32">
+        <Loader2 className="h-6 w-6 animate-spin text-cyan-500" />
+      </div>
+    );
   }
 
   return (
@@ -229,175 +294,120 @@ export function TimeDashboard({ currentUserId }: { currentUserId: string }) {
         </div>
       </div>
 
-      {/* ── Filters ─────────────────────────────────────────────────────────── */}
+      {/* ── One filter row, scoping everything below ────────────────────────── */}
       <div className="flex flex-wrap items-center gap-2">
-        <div className="flex flex-wrap gap-1 rounded-lg bg-white/5 p-1">
-          {RANGES.map((r) => (
-            <button
-              key={r.key}
-              onClick={() => setRange(r.key)}
-              className={cn(
-                "rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
-                range === r.key ? "bg-white/10 text-white" : "text-slate-400 hover:text-slate-200"
-              )}
-            >
-              {r.label}
-            </button>
-          ))}
-        </div>
-
+        <SegmentedControl
+          options={RANGES.map((r) => ({ value: r.key, label: r.label }))}
+          value={range}
+          onChange={(v) => setRange(v as RangeKey)}
+        />
         {people.length > 1 && (
-          <div className="flex flex-wrap gap-1 rounded-lg bg-white/5 p-1">
-            <button
-              onClick={() => setPersonId("")}
-              className={cn(
-                "rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
-                personId === "" ? "bg-white/10 text-white" : "text-slate-400 hover:text-slate-200"
-              )}
-            >
-              Alla
-            </button>
-            {people.map((p) => (
-              <button
-                key={p.id}
-                onClick={() => setPersonId(p.id)}
-                className={cn(
-                  "rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
-                  personId === p.id ? "bg-white/10 text-white" : "text-slate-400 hover:text-slate-200"
-                )}
-              >
-                {p.id === currentUserId ? `${p.name} (du)` : p.name}
-              </button>
-            ))}
-          </div>
+          <SegmentedControl
+            options={[
+              { value: "", label: "Alla" },
+              ...people.map((p) => ({ value: p.id, label: p.id === currentUserId ? `${p.name} (du)` : p.name })),
+            ]}
+            value={personId}
+            onChange={setPersonId}
+          />
         )}
       </div>
 
-      {loading ? (
-        <div className="flex items-center justify-center py-24">
-          <Loader2 className="h-6 w-6 animate-spin text-cyan-500" />
+      {/* Refetch holds the previous render at reduced opacity — no skeleton flash. */}
+      <div className={cn("space-y-5 transition-opacity", refreshing && "opacity-60")}>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <StatCard
+            icon={Clock}
+            label="Total tid"
+            value={formatDuration(stats.total)}
+            delta={stats.delta}
+            deltaLabel={compareLabel}
+            accent="text-cyan-400"
+          />
+          <StatCard icon={Layers} label="Pass" value={String(stats.count)} accent="text-violet-400" />
+          <StatCard
+            icon={Gauge}
+            label="Snitt per pass"
+            value={stats.count ? formatDuration(stats.avgSession) : "–"}
+            accent="text-emerald-400"
+          />
+          <StatCard
+            icon={CalendarDays}
+            label="Snitt per aktiv dag"
+            value={stats.activeDays ? formatDuration(stats.avgDay) : "–"}
+            sub={stats.activeDays ? `${stats.activeDays} aktiva dagar` : undefined}
+            accent="text-amber-400"
+          />
         </div>
-      ) : (
-        <>
-          {/* ── KPIs ────────────────────────────────────────────────────────── */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <StatCard icon={Clock} label="Total tid" value={formatDuration(stats.total)} accent="text-cyan-400" />
-            <StatCard icon={Layers} label="Pass" value={String(stats.count)} accent="text-violet-400" />
-            <StatCard
-              icon={Gauge}
-              label="Snitt per pass"
-              value={stats.count ? formatDuration(stats.avgSession) : "–"}
-              accent="text-emerald-400"
-            />
-            <StatCard
-              icon={CalendarDays}
-              label="Snitt per aktiv dag"
-              value={stats.activeDays ? formatDuration(stats.avgDay) : "–"}
-              sub={stats.activeDays ? `${stats.activeDays} dagar` : undefined}
-              accent="text-amber-400"
-            />
-          </div>
 
-          {sessions.length === 0 ? (
-            <EmptyState />
-          ) : (
-            <>
-              {/* ── Daily chart ───────────────────────────────────────────────── */}
-              {range !== "today" && (
-                <Panel
-                  title="Timmar per dag"
-                  subtitle={
-                    chartClamped
-                      ? "Staplat per kategori · visar senaste 92 dagarna"
-                      : "Staplat per kategori"
-                  }
-                >
-                  <div className="h-64 -ml-2">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={chart.rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
-                        <XAxis
-                          dataKey="label"
-                          tick={{ fill: "#64748b", fontSize: 11 }}
-                          axisLine={false}
-                          tickLine={false}
-                          interval="preserveStartEnd"
-                        />
-                        <YAxis
-                          tick={{ fill: "#64748b", fontSize: 11 }}
-                          axisLine={false}
-                          tickLine={false}
-                          width={32}
-                          tickFormatter={(v: number) => `${v}h`}
-                        />
-                        <Tooltip
-                          cursor={{ fill: "rgba(255,255,255,0.04)" }}
-                          contentStyle={{
-                            backgroundColor: "#0f1629",
-                            border: "1px solid rgba(255,255,255,0.1)",
-                            borderRadius: 10,
-                            fontSize: 12,
-                          }}
-                          labelStyle={{ color: "#e2e8f0", marginBottom: 4 }}
-                          formatter={(value, name) => [formatHours(Number(value ?? 0) * 3600), String(name ?? "")]}
-                        />
-                        {chart.categories.map((c) => (
-                          <Bar key={c.id} dataKey={c.id} stackId="a" name={c.name} fill={c.color} radius={0} />
-                        ))}
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                </Panel>
+        {sessions.length === 0 ? (
+          <EmptyState />
+        ) : (
+          <>
+            <TrendPanel
+              data={trend}
+              bucket={effectiveBucket}
+              bucketMode={bucket}
+              onBucketChange={setBucket}
+              asTable={trendAsTable}
+              onToggleTable={() => setTrendAsTable((v) => !v)}
+            />
+
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+              <Breakdown title="Per kategori" subtitle="Andel av perioden" slices={categorySlices} />
+              <Breakdown title="Per varumärke" subtitle="Vart krutet går" slices={brandSlices} />
+              {personSlices.length > 1 ? (
+                <Breakdown title="Per person" subtitle="Fördelning mellan er" slices={personSlices} />
+              ) : (
+                <TopFocusPanel slices={categorySlices} total={stats.total} />
               )}
+            </div>
 
-              {/* ── Breakdowns ────────────────────────────────────────────────── */}
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-                <Breakdown title="Per kategori" slices={categorySlices} />
-                <Breakdown title="Per varumärke" slices={brandSlices} />
-                {personSlices.length > 1 ? (
-                  <Breakdown title="Per person" slices={personSlices} />
-                ) : (
-                  <Panel title="Mest tid på" subtitle="Största posten i perioden">
-                    <TopFocus slices={categorySlices} total={stats.total} />
-                  </Panel>
-                )}
-              </div>
-
-              {/* ── Log ───────────────────────────────────────────────────────── */}
-              <Panel title="Loggbok" subtitle={`${sessions.length} pass · vad som faktiskt blev gjort`}>
-                <div className="space-y-5">
-                  {days.map((day) => (
-                    <div key={day.key}>
-                      <div className="flex items-baseline justify-between border-b border-white/5 pb-1.5 mb-2">
-                        <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                          {formatDayLabel(day.key)}
-                        </span>
-                        <span className="text-xs font-medium text-slate-500 tabular-nums">
-                          {formatDuration(day.seconds)}
-                        </span>
-                      </div>
-                      <div className="space-y-1">
-                        {day.sessions.map((s) => (
-                          <LogRow
-                            key={s.id}
-                            session={s}
-                            canEdit={s.userId === currentUserId}
-                            showPerson={personSlices.length > 1}
-                            onEdit={() => {
-                              setEditing(s);
-                              setEditorOpen(true);
-                            }}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  ))}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+              <WeekdayPanel data={weekdays} />
+              {/* A one-column heat map says nothing — only worth it over a few weeks. */}
+              {showHeatmap ? (
+                <div className="lg:col-span-2">
+                  <ActivityMap weeks={heat} />
                 </div>
-              </Panel>
-            </>
-          )}
-        </>
-      )}
+              ) : personSlices.length > 1 ? (
+                <TopFocusPanel slices={categorySlices} total={stats.total} />
+              ) : null}
+            </div>
+
+            <Panel title="Loggbok" subtitle={`${sessions.length} pass · vad som faktiskt blev gjort`}>
+              <div className="space-y-5">
+                {days.map((day) => (
+                  <div key={day.key}>
+                    <div className="flex items-baseline justify-between border-b border-white/5 pb-1.5 mb-2">
+                      <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                        {formatDayLabel(day.key)}
+                      </span>
+                      <span className="text-xs font-medium text-slate-500 tabular-nums">
+                        {formatDuration(day.seconds)}
+                      </span>
+                    </div>
+                    <div className="space-y-1">
+                      {day.sessions.map((s) => (
+                        <LogRow
+                          key={s.id}
+                          session={s}
+                          canEdit={s.userId === currentUserId}
+                          showPerson={personSlices.length > 1}
+                          onEdit={() => {
+                            setEditing(s);
+                            setEditorOpen(true);
+                          }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Panel>
+          </>
+        )}
+      </div>
 
       <SessionEditorDialog
         open={editorOpen}
@@ -421,22 +431,369 @@ export function TimeDashboard({ currentUserId }: { currentUserId: string }) {
   );
 }
 
+// ── Trend ────────────────────────────────────────────────────────────────────
+
+const BUCKETS: { value: Bucket | "auto"; label: string }[] = [
+  { value: "auto", label: "Auto" },
+  { value: "day", label: "Dag" },
+  { value: "week", label: "Vecka" },
+  { value: "month", label: "Månad" },
+];
+
+function TrendPanel({
+  data,
+  bucket,
+  bucketMode,
+  onBucketChange,
+  asTable,
+  onToggleTable,
+}: {
+  data: { rows: Record<string, string | number>[]; series: TrendSeries[] };
+  bucket: Bucket;
+  bucketMode: Bucket | "auto";
+  onBucketChange: (b: Bucket | "auto") => void;
+  asTable: boolean;
+  onToggleTable: () => void;
+}) {
+  const unit = bucket === "day" ? "dag" : bucket === "week" ? "vecka" : "månad";
+
+  return (
+    <div className="rounded-xl border border-white/5 bg-[#111827] p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
+        <div>
+          <h2 className="text-sm font-semibold text-white">Timmar per {unit}</h2>
+          <p className="text-[11px] text-slate-500 mt-0.5">Staplat per kategori</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <SegmentedControl
+            options={BUCKETS.map((b) => ({ value: b.value, label: b.label }))}
+            value={bucketMode}
+            onChange={(v) => onBucketChange(v as Bucket | "auto")}
+            size="sm"
+          />
+          <button
+            onClick={onToggleTable}
+            className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-[11px] font-medium text-slate-400 hover:text-white hover:bg-white/10 transition-colors"
+            title={asTable ? "Visa diagram" : "Visa som tabell"}
+          >
+            {asTable ? <BarChart3 className="h-3.5 w-3.5" /> : <TableIcon className="h-3.5 w-3.5" />}
+            {asTable ? "Diagram" : "Tabell"}
+          </button>
+        </div>
+      </div>
+
+      {/* Legend — identity is never carried by colour alone. */}
+      <div className="flex flex-wrap gap-x-4 gap-y-1.5 mb-3">
+        {data.series.map((s) => (
+          <span key={s.id} className="flex items-center gap-1.5 text-[11px] text-slate-400">
+            <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: s.color }} />
+            {s.name}
+          </span>
+        ))}
+      </div>
+
+      {asTable ? (
+        <TrendTable data={data} />
+      ) : (
+        <div className="h-72">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={data.rows} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+              <CartesianGrid stroke={INK.grid} vertical={false} />
+              <XAxis
+                dataKey="label"
+                tick={{ fill: INK.muted, fontSize: 11 }}
+                axisLine={{ stroke: INK.axis }}
+                tickLine={false}
+                interval="preserveStartEnd"
+                minTickGap={16}
+              />
+              <YAxis
+                tick={{ fill: INK.muted, fontSize: 11 }}
+                axisLine={false}
+                tickLine={false}
+                width={34}
+                tickFormatter={(v: number) => `${v}h`}
+              />
+              <Tooltip cursor={{ fill: "rgba(255,255,255,0.04)" }} content={<TrendTooltip />} />
+              {data.series.map((s) => (
+                <Bar
+                  key={s.id}
+                  dataKey={s.id}
+                  stackId="hours"
+                  name={s.name}
+                  fill={s.color}
+                  maxBarSize={24}
+                  /* 2px of surface between touching segments — the gap, not a border. */
+                  stroke={CHART_SURFACE}
+                  strokeWidth={2}
+                  /* Flat caps: which category tops a column varies per bucket, so a
+                     per-series radius would round a segment in the middle of a stack. */
+                  animationDuration={400}
+                />
+              ))}
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+    </div>
+  );
+}
+
+type TooltipEntry = { dataKey?: string | number; name?: string; value?: number; color?: string };
+
+function TrendTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean;
+  payload?: Array<TooltipEntry & { payload?: Record<string, string | number> }>;
+}) {
+  if (!active || !payload?.length) return null;
+  const head = payload[0]?.payload?.full ?? payload[0]?.payload?.label;
+  const rows = payload
+    .filter((p) => (p.value ?? 0) > 0)
+    .sort((a, b) => (b.value ?? 0) - (a.value ?? 0));
+  const total = payload.reduce((sum, p) => sum + (p.value ?? 0), 0);
+
+  return (
+    <div className="rounded-lg border border-white/10 bg-[#0f1629] px-3 py-2 shadow-xl">
+      <div className={cn("text-[11px] text-slate-400", rows.length > 0 && "mb-1.5")}>{String(head ?? "")}</div>
+      {rows.length === 0 && <div className="text-xs text-slate-500">Inget loggat</div>}
+      {rows.map((r) => (
+        <div key={String(r.dataKey)} className="flex items-center gap-2 text-xs leading-relaxed">
+          <span className="h-0.5 w-3 shrink-0 rounded-full" style={{ backgroundColor: r.color }} />
+          <span className="font-semibold text-white tabular-nums">{formatDuration((r.value ?? 0) * 3600)}</span>
+          <span className="text-slate-400">{r.name}</span>
+        </div>
+      ))}
+      {rows.length > 1 && (
+        <div className="mt-1.5 border-t border-white/5 pt-1.5 text-xs">
+          <span className="font-semibold text-white tabular-nums">{formatDuration(total * 3600)}</span>
+          <span className="ml-2 text-slate-500">totalt</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The table twin — every value the chart encodes, in text. */
+function TrendTable({ data }: { data: { rows: Record<string, string | number>[]; series: TrendSeries[] } }) {
+  const rows = data.rows.filter((r) => data.series.some((s) => (r[s.id] as number) > 0));
+  return (
+    <div className="max-h-72 overflow-auto">
+      <table className="w-full text-xs">
+        <thead className="sticky top-0 bg-[#111827]">
+          <tr className="text-left text-slate-500">
+            <th className="py-1.5 pr-3 font-medium">Period</th>
+            {data.series.map((s) => (
+              <th key={s.id} className="py-1.5 px-2 font-medium text-right whitespace-nowrap">
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="h-2 w-2 rounded-sm" style={{ backgroundColor: s.color }} />
+                  {s.name}
+                </span>
+              </th>
+            ))}
+            <th className="py-1.5 pl-2 font-medium text-right">Totalt</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-white/5">
+          {rows.map((r) => {
+            const total = data.series.reduce((sum, s) => sum + ((r[s.id] as number) ?? 0), 0);
+            return (
+              <tr key={String(r.key)} className="text-slate-300">
+                <td className="py-1.5 pr-3 whitespace-nowrap text-slate-400">{String(r.label)}</td>
+                {data.series.map((s) => (
+                  <td key={s.id} className="py-1.5 px-2 text-right tabular-nums">
+                    {(r[s.id] as number) > 0 ? formatDuration((r[s.id] as number) * 3600) : "–"}
+                  </td>
+                ))}
+                <td className="py-1.5 pl-2 text-right font-semibold text-white tabular-nums">
+                  {formatDuration(total * 3600)}
+                </td>
+              </tr>
+            );
+          })}
+          {rows.length === 0 && (
+            <tr>
+              <td colSpan={data.series.length + 2} className="py-6 text-center text-slate-500">
+                Inget loggat i perioden
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ── Activity map ─────────────────────────────────────────────────────────────
+
+function ActivityMap({ weeks }: { weeks: HeatCell[][] }) {
+  const [hovered, setHovered] = useState<HeatCell | null>(null);
+  const max = Math.max(...weeks.flat().map((c) => c.seconds), 1);
+  const dayLabels = ["M", "T", "O", "T", "F", "L", "S"];
+
+  return (
+    <Panel
+      title="Aktivitetskarta"
+      subtitle={`Timmar per dag · ${weeks.length} veckor`}
+      action={
+        <span className="flex items-center gap-1.5 text-[11px] text-slate-500">
+          Mindre
+          <span className="flex gap-0.5">
+            {[0, 0.2, 0.45, 0.7, 0.95].map((r) => (
+              <span
+                key={r}
+                className="h-2.5 w-2.5 rounded-sm"
+                style={{ backgroundColor: heatColor(r * max, max) }}
+              />
+            ))}
+          </span>
+          Mer
+        </span>
+      }
+    >
+      <div className="overflow-x-auto pb-1">
+        <div className="flex gap-[3px]">
+          <div className="flex flex-col gap-[3px] pr-1">
+            {dayLabels.map((d, i) => (
+              <span key={i} className="h-5 w-3 text-[9px] leading-5 text-slate-600">
+                {i % 2 === 0 ? d : ""}
+              </span>
+            ))}
+          </div>
+          {weeks.map((week, wi) => (
+            <div key={wi} className="flex flex-col gap-[3px]">
+              {week.map((cell) => {
+                if (cell.seconds < 0) return <span key={cell.key} className="h-5 w-5" />;
+                const isHovered = hovered?.key === cell.key;
+                return (
+                  <button
+                    key={cell.key}
+                    type="button"
+                    onMouseEnter={() => setHovered(cell)}
+                    onMouseLeave={() => setHovered(null)}
+                    onFocus={() => setHovered(cell)}
+                    onBlur={() => setHovered(null)}
+                    className={cn(
+                      "h-5 w-5 rounded-sm transition-shadow outline-none",
+                      isHovered && "ring-2 ring-white/60"
+                    )}
+                    style={{ backgroundColor: heatColor(cell.seconds, max) }}
+                    aria-label={`${cell.key}: ${formatDuration(cell.seconds)}`}
+                  />
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="mt-2.5 h-4 text-[11px]">
+        {hovered ? (
+          <span className="text-slate-300">
+            <span className="font-semibold text-white tabular-nums">{formatDuration(hovered.seconds)}</span>
+            <span className="ml-2 text-slate-500">
+              {hovered.date.toLocaleDateString("sv-SE", { weekday: "long", day: "numeric", month: "long" })}
+            </span>
+          </span>
+        ) : (
+          <span className="text-slate-600">Hovra en ruta för dagens tid — alla värden finns i loggboken.</span>
+        )}
+      </div>
+    </Panel>
+  );
+}
+
+// ── Weekday pattern ──────────────────────────────────────────────────────────
+
+function WeekdayPanel({ data }: { data: { label: string; hours: number }[] }) {
+  const empty = data.every((d) => d.hours === 0);
+  return (
+    <Panel title="Veckodagsmönster" subtitle="När på veckan tiden läggs">
+      {empty ? (
+        <p className="text-xs text-slate-500">Inget loggat</p>
+      ) : (
+        <div className="h-[168px] -ml-2">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={data} margin={{ top: 16, right: 4, bottom: 0, left: 0 }}>
+              <CartesianGrid stroke={INK.grid} vertical={false} />
+              <XAxis
+                dataKey="label"
+                tick={{ fill: INK.muted, fontSize: 11 }}
+                axisLine={{ stroke: INK.axis }}
+                tickLine={false}
+              />
+              <YAxis hide />
+              {/* Single series — one hue, no legend needed; the title names it. */}
+              <Bar dataKey="hours" fill="#3987e5" maxBarSize={24} radius={[4, 4, 0, 0]}>
+                <LabelList
+                  dataKey="hours"
+                  position="top"
+                  formatter={(v: unknown) => (Number(v) > 0 ? formatDuration(Number(v) * 3600) : "")}
+                  fill={INK.muted}
+                  fontSize={10}
+                />
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
 // ── Building blocks ──────────────────────────────────────────────────────────
+
+function SegmentedControl({
+  options,
+  value,
+  onChange,
+  size = "md",
+}: {
+  options: { value: string; label: string }[];
+  value: string;
+  onChange: (value: string) => void;
+  size?: "sm" | "md";
+}) {
+  return (
+    <div className="flex flex-wrap gap-1 rounded-lg bg-white/5 p-1">
+      {options.map((o) => (
+        <button
+          key={o.value}
+          onClick={() => onChange(o.value)}
+          className={cn(
+            "rounded-md font-medium transition-colors",
+            size === "sm" ? "px-2 py-1 text-[11px]" : "px-3 py-1.5 text-xs",
+            value === o.value ? "bg-white/10 text-white" : "text-slate-400 hover:text-slate-200"
+          )}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 function Panel({
   title,
   subtitle,
+  action,
   children,
 }: {
   title: string;
   subtitle?: string;
+  action?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <div className="rounded-xl border border-white/5 bg-[#111827] p-4">
-      <div className="mb-3">
-        <h2 className="text-sm font-semibold text-white">{title}</h2>
-        {subtitle && <p className="text-[11px] text-slate-500 mt-0.5">{subtitle}</p>}
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h2 className="text-sm font-semibold text-white">{title}</h2>
+          {subtitle && <p className="text-[11px] text-slate-500 mt-0.5">{subtitle}</p>}
+        </div>
+        {action}
       </div>
       {children}
     </div>
@@ -448,29 +805,44 @@ function StatCard({
   label,
   value,
   sub,
+  delta,
+  deltaLabel,
   accent,
 }: {
   icon: React.ElementType;
   label: string;
   value: string;
   sub?: string;
+  delta?: number | null;
+  deltaLabel?: string | null;
   accent: string;
 }) {
+  const showDelta = delta !== null && delta !== undefined && deltaLabel;
+  const up = (delta ?? 0) >= 0;
   return (
     <div className="rounded-xl border border-white/5 bg-[#111827] p-4">
       <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-widest text-slate-500">
         <Icon className={cn("h-3.5 w-3.5", accent)} />
         {label}
       </div>
-      <div className="mt-1.5 text-2xl font-bold text-white tabular-nums">{value}</div>
-      {sub && <div className="text-[11px] text-slate-500">{sub}</div>}
+      <div className="mt-1.5 text-2xl font-bold text-white">{value}</div>
+      {showDelta ? (
+        // Neutral ink: more hours is not automatically good or bad.
+        <div className="flex items-center gap-1 text-[11px] text-slate-500">
+          {up ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />}
+          <span className="tabular-nums">{Math.abs(Math.round((delta ?? 0) * 100))}%</span>
+          <span>vs {deltaLabel}</span>
+        </div>
+      ) : (
+        sub && <div className="text-[11px] text-slate-500">{sub}</div>
+      )}
     </div>
   );
 }
 
-function Breakdown({ title, slices }: { title: string; slices: Slice[] }) {
+function Breakdown({ title, subtitle, slices }: { title: string; subtitle?: string; slices: Slice[] }) {
   return (
-    <Panel title={title}>
+    <Panel title={title} subtitle={subtitle}>
       {slices.length === 0 ? (
         <p className="text-xs text-slate-500">Inget loggat</p>
       ) : (
@@ -479,10 +851,7 @@ function Breakdown({ title, slices }: { title: string; slices: Slice[] }) {
             <div key={slice.id}>
               <div className="flex items-baseline justify-between gap-2 mb-1">
                 <span className="flex items-center gap-1.5 min-w-0">
-                  <span
-                    className="h-2 w-2 shrink-0 rounded-full"
-                    style={{ backgroundColor: slice.color }}
-                  />
+                  <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: slice.color }} />
                   <span className="truncate text-xs text-slate-300">{slice.name}</span>
                 </span>
                 <span className="shrink-0 text-xs font-medium text-slate-400 tabular-nums">
@@ -492,7 +861,7 @@ function Breakdown({ title, slices }: { title: string; slices: Slice[] }) {
               </div>
               <div className="h-1.5 rounded-full bg-white/5 overflow-hidden">
                 <div
-                  className="h-full rounded-full transition-all"
+                  className="h-full rounded-full"
                   style={{ width: `${Math.max(slice.share * 100, 1.5)}%`, backgroundColor: slice.color }}
                 />
               </div>
@@ -504,20 +873,25 @@ function Breakdown({ title, slices }: { title: string; slices: Slice[] }) {
   );
 }
 
-function TopFocus({ slices, total }: { slices: Slice[]; total: number }) {
+function TopFocusPanel({ slices, total }: { slices: Slice[]; total: number }) {
   const top = slices[0];
-  if (!top) return <p className="text-xs text-slate-500">Inget loggat</p>;
   return (
-    <div>
-      <div className="text-3xl font-bold text-white">{Math.round(top.share * 100)}%</div>
-      <div className="mt-1 flex items-center gap-1.5">
-        <span className="h-2 w-2 rounded-full" style={{ backgroundColor: top.color }} />
-        <span className="text-sm text-slate-300">{top.name}</span>
-      </div>
-      <p className="mt-2 text-[11px] text-slate-500">
-        {formatDuration(top.seconds)} av {formatDuration(total)} i perioden.
-      </p>
-    </div>
+    <Panel title="Mest tid på" subtitle="Största posten i perioden">
+      {!top ? (
+        <p className="text-xs text-slate-500">Inget loggat</p>
+      ) : (
+        <div>
+          <div className="text-5xl font-bold text-white">{Math.round(top.share * 100)}%</div>
+          <div className="mt-1.5 flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-full" style={{ backgroundColor: top.color }} />
+            <span className="text-sm text-slate-300">{top.name}</span>
+          </div>
+          <p className="mt-2 text-[11px] text-slate-500">
+            {formatDuration(top.seconds)} av {formatDuration(total)} i perioden.
+          </p>
+        </div>
+      )}
+    </Panel>
   );
 }
 
