@@ -16,6 +16,7 @@ declare module "next-auth" {
       email: string;
       name: string;
       role: string;
+      isFounder: boolean;
       image?: string | null;
     };
   }
@@ -84,11 +85,14 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (session.user) {
         session.user.id = token.sub as string;
         session.user.role = token.role as string;
+        session.user.isFounder = false;
 
         try {
           // M8: Verify user is still active in DB
+          // isFounder is read live (not from the JWT) so flipping the flag takes
+          // effect without the user having to sign out and back in.
           const [dbUser] = await db
-            .select({ isActive: users.isActive })
+            .select({ isActive: users.isActive, isFounder: users.isFounder })
             .from(users)
             .where(and(eq(users.id, token.sub as string), eq(users.isActive, true)))
             .limit(1);
@@ -96,6 +100,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           if (!dbUser) {
             return { expires: session.expires } as unknown as Session;
           }
+          session.user.isFounder = dbUser.isFounder ?? false;
         } catch (error) {
           console.error("Session DB check error:", error);
         }

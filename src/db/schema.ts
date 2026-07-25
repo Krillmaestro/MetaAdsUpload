@@ -12,6 +12,7 @@ export const users = pgTable("users", {
   slug: text("slug").unique(), // public vanity slug for /e/[slug] performance page
   publicPagePassword: text("public_page_password"), // optional bcrypt hash to gate the public page
   isActive: boolean("is_active").default(true).notNull(),
+  isFounder: boolean("is_founder").default(false).notNull(), // gates the founder time tracker (/time)
   hourlyRate: real("hourly_rate"),
   phone: text("phone"), // E.164, e.g. +46701234567 — used for WhatsApp notifications
   timezone: text("timezone").default("Europe/Stockholm"),
@@ -767,3 +768,49 @@ export const shopifyDailyStats = pgTable("shopify_daily_stats", {
   returningCustomerRevenue: real("returning_customer_revenue").default(0),
   syncedAt: timestamp("synced_at").defaultNow().notNull(),
 });
+
+// ─── Founder Time Tracking ───────────────────────────────────────────────────
+// Separate from `time_entries` (which powers editor scorecards + bonuses) so
+// founder hours never pollute editor stats.
+
+export const workCategories = pgTable("work_categories", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  name: text("name").notNull().unique(),
+  color: text("color").notNull().default("#38bdf8"), // hex, used directly by charts/chips
+  isActive: boolean("is_active").default(true).notNull(),
+  sortOrder: integer("sort_order").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const workBrands = pgTable("work_brands", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  name: text("name").notNull().unique(),
+  color: text("color").notNull().default("#a78bfa"),
+  isActive: boolean("is_active").default(true).notNull(),
+  sortOrder: integer("sort_order").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const workSessions = pgTable("work_sessions", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  userId: text("user_id").notNull(),
+  categoryId: text("category_id").notNull(),
+  brandId: text("brand_id"),
+  task: text("task"), // optional short label set when starting
+  note: text("note"), // REQUIRED on stop — what actually got done
+  startedAt: timestamp("started_at").notNull(),
+  endedAt: timestamp("ended_at"),
+  // Server-authoritative clock: elapsed = accumulatedSeconds + (running ? now - segmentStartedAt : 0)
+  segmentStartedAt: timestamp("segment_started_at"),
+  accumulatedSeconds: integer("accumulated_seconds").default(0).notNull(),
+  durationSeconds: integer("duration_seconds"), // final, set on stop
+  status: text("status").notNull().default("running"), // running | paused | done
+  source: text("source").notNull().default("timer"), // timer | manual
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("work_sessions_user_id_idx").on(table.userId),
+  index("work_sessions_started_at_idx").on(table.startedAt),
+  index("work_sessions_category_id_idx").on(table.categoryId),
+  index("work_sessions_status_idx").on(table.status),
+]);

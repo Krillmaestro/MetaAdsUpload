@@ -33,6 +33,7 @@ import {
   ScrollText,
   ShoppingBag,
   Rocket,
+  Hourglass,
 } from "lucide-react";
 import { signOut } from "next-auth/react";
 
@@ -42,8 +43,14 @@ type NavSection = {
   items: { href: string; label: string; icon: React.ComponentType<{ className?: string }> }[];
 };
 
+// Founder-only time tracker — the co-founder may not hold an admin role.
+const founderSection: NavSection = {
+  label: "FOUNDERS",
+  items: [{ href: "/time", label: "Time Tracker", icon: Hourglass }],
+};
+
 // Video editors get a minimal menu: their workflow + their own public page.
-function editorNavSections(editorSlug?: string | null): NavSection[] {
+function editorNavSections(editorSlug?: string | null, isFounder?: boolean): NavSection[] {
   return [
     {
       label: "WORKFLOW",
@@ -52,6 +59,7 @@ function editorNavSections(editorSlug?: string | null): NavSection[] {
         { href: "/timer", label: "Timer", icon: Timer },
       ],
     },
+    ...(isFounder ? [founderSection] : []),
     ...(editorSlug
       ? [{
           label: "MY PAGE",
@@ -124,13 +132,16 @@ const navSections: NavSection[] = [
   },
 ];
 
-function SidebarContent({ onNavClick, userRole, editorSlug }: { onNavClick?: () => void; userRole: "admin" | "editor"; editorSlug?: string | null }) {
+function SidebarContent({ onNavClick, userRole, editorSlug, isFounder }: { onNavClick?: () => void; userRole: "admin" | "editor"; editorSlug?: string | null; isFounder?: boolean }) {
   const pathname = usePathname();
 
   const filteredSections =
     userRole === "admin"
-      ? navSections.filter((s) => !s.requiredRole || s.requiredRole === userRole)
-      : editorNavSections(editorSlug);
+      ? [
+          ...navSections.filter((s) => !s.requiredRole || s.requiredRole === userRole),
+          ...(isFounder ? [founderSection] : []),
+        ]
+      : editorNavSections(editorSlug, isFounder);
 
   return (
     <>
@@ -199,14 +210,14 @@ function SidebarContent({ onNavClick, userRole, editorSlug }: { onNavClick?: () 
   );
 }
 
-export function Sidebar({ userRole = "editor", editorSlug }: { userRole?: "admin" | "editor"; editorSlug?: string | null }) {
+export function Sidebar({ userRole = "editor", editorSlug, isFounder }: { userRole?: "admin" | "editor"; editorSlug?: string | null; isFounder?: boolean }) {
   const [mobileOpen, setMobileOpen] = useState(false);
 
   return (
     <>
       {/* Desktop sidebar — always visible at md+ */}
       <div className="hidden md:flex h-screen w-56 flex-col bg-[#0f1629] border-r border-white/5 shrink-0">
-        <SidebarContent userRole={userRole} editorSlug={editorSlug} />
+        <SidebarContent userRole={userRole} editorSlug={editorSlug} isFounder={isFounder} />
       </div>
 
       {/* Mobile drawer backdrop */}
@@ -233,7 +244,7 @@ export function Sidebar({ userRole = "editor", editorSlug }: { userRole?: "admin
           <X className="h-5 w-5" />
         </button>
 
-        <SidebarContent onNavClick={() => setMobileOpen(false)} userRole={userRole} editorSlug={editorSlug} />
+        <SidebarContent onNavClick={() => setMobileOpen(false)} userRole={userRole} editorSlug={editorSlug} isFounder={isFounder} />
       </div>
 
       {/* Mobile top bar */}
