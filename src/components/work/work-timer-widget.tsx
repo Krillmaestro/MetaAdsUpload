@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Play, Pause, Square, X, Timer as TimerIcon, Trash2, AlertTriangle, Loader2 } from "lucide-react";
+import { Play, Pause, Square, X, Timer as TimerIcon, Trash2, AlertTriangle, Loader2, Coffee } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Textarea } from "@/components/ui/textarea";
@@ -333,6 +333,23 @@ export function WorkTimerWidget() {
                   <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-px" />
                   <span>Timern har gått i {formatDuration(elapsed)}. Glömde du stoppa?</span>
                 </div>
+              )}
+
+              {/* The pause button existed but nobody had been told to use it, so
+                  breaks were being logged as work. State the rule where it is
+                  actually read: next to the running clock. */}
+              {running && !longRun && (
+                <p className="mt-2.5 flex items-start gap-1.5 text-[11px] leading-relaxed text-slate-500">
+                  <Coffee className="mt-px h-3 w-3 shrink-0" />
+                  <span>Pausa vid toa, kaffe eller rast — tiden ska spegla arbete.</span>
+                </p>
+              )}
+
+              {paused && (
+                <p className="mt-2.5 flex items-start gap-1.5 rounded-lg border border-yellow-500/20 bg-yellow-500/10 px-2.5 py-2 text-[11px] leading-relaxed text-yellow-300">
+                  <Coffee className="mt-px h-3 w-3 shrink-0" />
+                  <span>Pausad — ingen tid räknas. Tryck Fortsätt när du är tillbaka.</span>
+                </p>
               )}
             </div>
 
