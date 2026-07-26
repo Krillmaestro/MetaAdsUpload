@@ -146,6 +146,19 @@ export default function AdSetAnalyzerPage() {
     try { localStorage.setItem("adsetAnalyzerAccount", id); } catch { /* private mode */ }
   }, []);
 
+  // Spend comes back from Meta in the AD ACCOUNT's currency, so labelling it
+  // "SEK" everywhere was simply wrong for DogDivaCO (USD). Falls back to SEK
+  // only until the account list has loaded.
+  const currency = accounts.find((a) => a.id === account)?.currency ?? "SEK";
+  const money = useCallback(
+    (n: number, digits = 0) =>
+      `${n.toLocaleString("sv-SE", { minimumFractionDigits: digits, maximumFractionDigits: digits })} ${currency}`,
+    [currency]
+  );
+  // Evolve thresholds are one global set, configured in SEK. On a non-SEK
+  // account they are not just mislabelled — they are the wrong magnitude.
+  const thresholdsMismatch = currency !== "SEK";
+
   // Team members for the owner picker (admin only — silently empty otherwise).
   useEffect(() => {
     (async () => {
@@ -330,7 +343,7 @@ export default function AdSetAnalyzerPage() {
           </h1>
           {data && (
             <p className="text-sm text-slate-500 mt-0.5">
-              Target: {data.settings.targetRoas}x &middot; Breakeven: {data.settings.breakevenRoas}x &middot; CPA: {data.settings.targetCpa} SEK
+              Target: {data.settings.targetRoas}x &middot; Breakeven: {data.settings.breakevenRoas}x &middot; CPA: {data.settings.targetCpa} SEK{thresholdsMismatch && <span className="ml-2 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-400">tröskeln är satt i SEK — kontot är {currency}</span>}
             </p>
           )}
         </div>
@@ -427,7 +440,7 @@ export default function AdSetAnalyzerPage() {
           {/* KPI row */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             <KpiCard label="Ad Sets" value={String(data.summary.totalAdsets)} />
-            <KpiCard label="Spend" value={`${data.summary.totalSpend.toFixed(0)} SEK`} />
+            <KpiCard label="Spend" value={money(data.summary.totalSpend)} />
             <KpiCard label="ROAS" value={`${data.summary.overallRoas.toFixed(2)}x`}
               color={data.summary.overallRoas >= data.settings.targetRoas ? "text-emerald-400" : data.summary.overallRoas >= data.settings.breakevenRoas ? "text-amber-400" : "text-red-400"} />
             <KpiCard label="Purchases" value={String(data.summary.totalPurchases)} />
@@ -528,7 +541,7 @@ export default function AdSetAnalyzerPage() {
                           adset.spendProgress >= 1 ? "bg-cyan-400" : adset.spendProgress >= 0.5 ? "bg-amber-400" : "bg-slate-600"
                         )} style={{ width: `${Math.min(adset.spendProgress * 100, 100)}%` }} />
                       </div>
-                      <span className="text-[9px] text-slate-600">{adset.spend.toFixed(0)}/{adset.spendThreshold.toFixed(0)} SEK</span>
+                      <span className="text-[9px] text-slate-600">{adset.spend.toFixed(0)}/{adset.spendThreshold.toFixed(0)} {currency}</span>
                     </div>
 
                     {/* Owner (ad-set level) */}
@@ -673,7 +686,7 @@ export default function AdSetAnalyzerPage() {
                           <p className="flex-1 text-xs text-slate-400 truncate min-w-0">{ad.name}</p>
                           {/* Mini metrics */}
                           <div className="flex items-center gap-4 shrink-0 text-xs">
-                            <span className="text-slate-500">{ad.spend.toFixed(0)} SEK</span>
+                            <span className="text-slate-500">{ad.spend.toFixed(0)} {currency}</span>
                             <span className={cn("font-medium",
                               ad.roas >= (data?.settings.targetRoas || 0) ? "text-emerald-400" :
                               ad.roas >= (data?.settings.breakevenRoas || 0) ? "text-amber-400" :
