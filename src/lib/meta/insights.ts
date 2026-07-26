@@ -79,6 +79,9 @@ export async function getInsights(params: {
 
   return metaApiPaginated<InsightData>(endpoint, {
     params: queryParams,
+    // Callers delete a whole window before writing this back — a partial
+    // result would silently shrink the table. Fail instead.
+    strict: true,
   });
 }
 
@@ -97,6 +100,7 @@ export async function getAdInsightsById(
       time_increment: timeIncrement,
       time_range: JSON.stringify(dateRange),
     },
+    strict: true,
   });
 }
 
@@ -113,6 +117,7 @@ export async function getAdsetInsightsByAd(
       time_increment: timeIncrement,
       time_range: JSON.stringify(dateRange),
     },
+    strict: true,
   });
 }
 

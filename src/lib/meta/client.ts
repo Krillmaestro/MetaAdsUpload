@@ -123,6 +123,12 @@ interface MetaRequestOptions {
   params?: Record<string, string | number | boolean>;
   body?: Record<string, unknown> | FormData;
   token?: string;
+  /**
+   * Throw if pagination stops early instead of returning a partial list.
+   * Required by any caller that deletes before writing — a half-fetched
+   * result must never be mistaken for the full truth.
+   */
+  strict?: boolean;
 }
 
 export async function getActiveConnection() {
@@ -497,7 +503,16 @@ export async function metaApiPaginated<T = unknown>(
           continue; // Retry same nextUrl
         }
         console.error("Pagination error:", metaError?.message);
-        break; // Stop pagination on other errors
+        // Returning a partial page set silently is dangerous: callers that
+        // delete-then-reinsert (replaceInsights) would wipe a full window and
+        // write back only the fraction that arrived. `strict` makes the caller
+        // fail loudly instead, leaving existing rows untouched.
+        if (options.strict) {
+          throw new Error(
+            `Pagination failed after ${allItems.length} items: ${metaError?.message ?? "unknown error"}`
+          );
+        }
+        break; // Non-strict callers accept a partial list
       }
 
       paginationRetries = 0; // Reset on success

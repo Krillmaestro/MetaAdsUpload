@@ -3,7 +3,7 @@
 // from Meta into the insights table, and refreshes campaign/ad metadata caches.
 
 import { db, schema } from "@/db";
-import { and, eq, gte, lte, inArray, isNotNull, isNull, or } from "drizzle-orm";
+import { and, eq, gte, lte, inArray, isNotNull, isNull, or, count as sqlCount } from "drizzle-orm";
 import {
   getInsights,
   getAdsetInsightsByAd,
@@ -85,6 +85,24 @@ async function replaceInsights(
   for (let d = since; d <= until; d = new Date(new Date(`${d}T00:00:00Z`).getTime() + 86400000).toISOString().slice(0, 10)) {
     allDays.add(d);
   }
+
+  // A completely empty fetch for a window that currently holds data is almost
+  // always a failed call rather than the truth — Meta returning nothing for an
+  // account that was spending yesterday. Clearing on that basis destroys
+  // history for no gain, so skip instead. A genuinely empty window simply
+  // stays as it was until a fetch returns rows.
+  if (rows.length === 0) {
+    const [{ count } = { count: 0 }] = await db
+      .select({ count: sqlCount() })
+      .from(schema.insights)
+      .where(and(eq(schema.insights.entityType, entityType), gte(schema.insights.dateStart, since), lte(schema.insights.dateStart, until), accountScope));
+    if (Number(count) > 0) {
+      console.warn(
+        `replaceInsights: refusing to clear ${count} existing ${entityType} rows in ${since}..${until} — fetch returned nothing`
+      );
+      return;
+    }
+  }
   for (const day of [...allDays].sort()) {
     await db.delete(schema.insights).where(
       and(
@@ -106,6 +124,13 @@ async function replaceInsights(
 // set must pull its entire history — not just the rolling window. Meta caps
 // daily-granularity insight queries, so long ranges are fetched in chunks.
 const BACKFILL_CHUNK_DAYS = 90;
+
+/**
+ * Window size for account-wide ad-level insight pulls. Small enough that
+ * pagination completes on accounts with thousands of ads — the 30-day
+ * single-shot version failed mid-pagination and cost real rows.
+ */
+const AD_INSIGHT_CHUNK_DAYS = 7;
 const MAX_BACKFILLS_PER_RUN = 8; // keep a single run within Hobby function limits
 const MAX_HISTORY_DAYS = 1100; // Meta retains ~37 months of insights
 
@@ -373,20 +398,37 @@ async function syncOneAccount(adAccountId: string, isPrimary: boolean) {
   const campaignRows = campaignInsights.filter((r) => r.campaign_id).map((r) => toRow(r, r.campaign_id!, "campaign", adAccountId));
   await replaceInsights("campaign", since, today, campaignRows, adAccountId, isPrimary);
 
-  // 4. Ad-level daily insights (powers the editor dashboard) — with video metrics
-  const adInsights = await getInsights({
-    level: "ad",
-    dateRange: { since, until: today },
-    timeIncrement: 1,
-    includeVideoMetrics: true,
-  });
-  const adRows = adInsights.filter((r) => r.ad_id).map((r) => toRow(r, r.ad_id!, "ad", adAccountId));
-  await replaceInsights("ad", since, today, adRows, adAccountId, isPrimary);
+  // 4. Ad-level daily insights (powers the editor dashboard) — with video metrics.
+  //
+  // Fetched in weekly chunks. A single 30-day request across every ad in a large
+  // account is big enough that Meta's pagination gives up partway ("an unknown
+  // error occurred"); combined with the delete-then-write below that silently
+  // shrank the table, because a whole window was cleared and only the fraction
+  // that arrived was written back. Small windows paginate cleanly, and each
+  // chunk replaces only its own days, so a failure late in the run cannot
+  // damage the days already rebuilt.
+  let adRowCount = 0;
+  let cursor = since;
+  while (cursor <= today) {
+    const chunkEnd = addDays(cursor, AD_INSIGHT_CHUNK_DAYS - 1) < today
+      ? addDays(cursor, AD_INSIGHT_CHUNK_DAYS - 1)
+      : today;
+    const chunk = await getInsights({
+      level: "ad",
+      dateRange: { since: cursor, until: chunkEnd },
+      timeIncrement: 1,
+      includeVideoMetrics: true,
+    });
+    const rows = chunk.filter((r) => r.ad_id).map((r) => toRow(r, r.ad_id!, "ad", adAccountId));
+    await replaceInsights("ad", cursor, chunkEnd, rows, adAccountId, isPrimary);
+    adRowCount += rows.length;
+    cursor = addDays(chunkEnd, 1);
+  }
 
   return {
     campaigns: campaigns.length,
     ads: ads.length,
     campaignInsightRows: campaignRows.length,
-    adInsightRows: adRows.length,
+    adInsightRows: adRowCount,
   };
 }
