@@ -260,3 +260,49 @@ export function ctaShare(page: PageMeta): number | null {
   if (!page.clickSessions || page.ctaClicks === null) return null;
   return page.ctaClicks / page.clickSessions;
 }
+
+/* ── How much the numbers can actually carry ────────────────────────────── */
+
+/**
+ * Wilson score interval — correct at the sample sizes we work with. The normal
+ * approximation produces impossible bounds (below 0, above 1) when n is small
+ * and the rate is near an edge, which is exactly our situation.
+ */
+export function wilson(successes: number, n: number, z = 1.96): { p: number; lo: number; hi: number } | null {
+  if (!n) return null;
+  const p = successes / n;
+  const denom = 1 + (z * z) / n;
+  const centre = (p + (z * z) / (2 * n)) / denom;
+  const margin = (z * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n))) / denom;
+  return { p, lo: Math.max(0, centre - margin), hi: Math.min(1, centre + margin) };
+}
+
+export type Strength = "none" | "thin" | "early" | "readable";
+
+export const STRENGTH_META: Record<Strength, { label: string; hex: string; blurb: string }> = {
+  none: { label: "Ingen data", hex: "#64748b", blurb: "Inga klick registrerade — ingenting går att säga." },
+  thin: { label: "För tunt", hex: "#64748b", blurb: "Under 30 klickande sessioner. Läs som en anekdot, inte som ett resultat." },
+  early: { label: "Tidig signal", hex: "#fab219", blurb: "30–99 klickande sessioner. Riktningen kan vara verklig, siffran är det inte." },
+  readable: { label: "Läsbar", hex: "#0ca30c", blurb: "100+ klickande sessioner. Punktvärdet börjar hålla." },
+};
+
+/** Deliberately about the DENOMINATOR, never the rate — a flattering rate on 12 sessions is still noise. */
+export function strengthOf(n: number | null): Strength {
+  if (!n) return "none";
+  if (n < 30) return "thin";
+  if (n < 100) return "early";
+  return "readable";
+}
+
+/** Click-sessions needed to pin a rate to ±margin at 95%. Drives the "how much longer?" hint. */
+export function sampleNeeded(rate: number, margin: number, z = 1.96): number {
+  return Math.ceil(((z * z) * rate * (1 - rate)) / (margin * margin));
+}
+
+/** Two rates differ only if their intervals do not overlap. */
+export function separated(a: PageMeta, b: PageMeta): boolean {
+  const wa = a.clickSessions && a.ctaClicks !== null ? wilson(a.ctaClicks, a.clickSessions) : null;
+  const wb = b.clickSessions && b.ctaClicks !== null ? wilson(b.ctaClicks, b.clickSessions) : null;
+  if (!wa || !wb) return false;
+  return wa.lo > wb.hi || wb.lo > wa.hi;
+}

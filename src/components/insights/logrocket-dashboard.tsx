@@ -26,7 +26,12 @@ import {
   daysInRange,
   PRESETS,
   resolvePreset,
+  sampleNeeded,
+  separated,
   SOURCE_LABEL,
+  STRENGTH_META,
+  strengthOf,
+  wilson,
   type Aggregated,
   type Blocker,
   type LogRocketPayload,
@@ -534,23 +539,35 @@ export function LogRocketDashboard({ versions: initialVersions, initialCurrent, 
           </div>
 
           {/* Pages */}
-          <Card title="Sidorna" hint="Sessioner följer vald period. CTA-genomslag mäts över hela hämtningen — LogRocket bryter inte ut klick per dag.">
+          <Card
+            title="Sidorna"
+            hint="Sessioner följer vald period. CTA-genomslag mäts över hela hämtningen — LogRocket bryter inte ut klick per dag. Bandet är 95 % osäkerhetsintervall: så brett kan sanningen vara."
+          >
             <div className="-mx-1 overflow-x-auto">
-              <table className="w-full min-w-[720px] border-collapse text-sm">
+              <table className="w-full min-w-[820px] border-collapse text-sm">
                 <thead>
                   <tr className="border-b border-white/5 text-left text-[10px] uppercase tracking-widest text-slate-500">
                     <th className="px-1 pb-2 font-semibold">Sida</th>
                     <th className="px-1 pb-2 font-semibold">Roll</th>
                     <th className="px-1 pb-2 text-right font-semibold">Sessioner</th>
                     <th className="px-1 pb-2 text-right font-semibold">Med klick</th>
-                    <th className="px-1 pb-2 font-semibold">CTA-genomslag</th>
+                    <th className="px-1 pb-2 font-semibold">CTA-genomslag <span className="normal-case text-slate-600">(95 % intervall)</span></th>
+                    <th className="px-1 pb-2 font-semibold">Datastyrka</th>
                     <th className="px-1 pb-2 font-semibold">Läge</th>
                   </tr>
                 </thead>
                 <tbody>
                   {data.period.pages.map((p) => {
                     const share = ctaShare(p);
-                    const status = PAGE_STATUS[p.status] ?? PAGE_STATUS.neutral;
+                    const ci = p.clickSessions && p.ctaClicks !== null ? wilson(p.ctaClicks, p.clickSessions) : null;
+                    const strength = strengthOf(p.clickSessions);
+                    const sm = STRENGTH_META[strength];
+                    // A verdict is only as strong as its denominator — thin data can never read "Skalar".
+                    const status =
+                      strength === "none" || strength === "thin"
+                        ? PAGE_STATUS.neutral
+                        : PAGE_STATUS[p.status] ?? PAGE_STATUS.neutral;
+                    const needed = ci ? sampleNeeded(ci.p, 0.1) : null;
                     return (
                       <tr key={p.path} className="border-b border-white/5 align-top last:border-0">
                         <td className="px-1 py-3">
@@ -565,14 +582,41 @@ export function LogRocketDashboard({ versions: initialVersions, initialCurrent, 
                           {p.clickSessions ? nf.format(p.clickSessions) : "—"}
                         </td>
                         <td className="px-1 py-3">
-                          {share === null ? (
+                          {share === null || !ci ? (
                             <span className="text-xs text-slate-600">ej mätbart</span>
                           ) : (
-                            <div className="flex items-center gap-2">
-                              <div className="h-1.5 w-20 overflow-hidden rounded-full bg-white/5">
-                                <div className="h-full rounded-full" style={{ width: `${share * 100}%`, backgroundColor: SERIES }} />
+                            <div className="flex flex-col gap-1">
+                              <div className="flex items-center gap-2">
+                                {/* Track = 0–100 %. Pale band = the interval, solid tick = the estimate. */}
+                                <div className="relative h-2.5 w-28 overflow-hidden rounded-full bg-white/5">
+                                  <div
+                                    className="absolute inset-y-0 rounded-full"
+                                    style={{ left: `${ci.lo * 100}%`, width: `${(ci.hi - ci.lo) * 100}%`, backgroundColor: `${SERIES}59` }}
+                                  />
+                                  <div
+                                    className="absolute inset-y-0 w-[2px] rounded-full"
+                                    style={{ left: `calc(${ci.p * 100}% - 1px)`, backgroundColor: SERIES }}
+                                  />
+                                </div>
+                                <span className="text-xs font-semibold text-white tabular-nums">{pct(share)}</span>
                               </div>
-                              <span className="text-xs font-semibold text-white tabular-nums">{pct(share)}</span>
+                              <span className="text-[10px] text-slate-500 tabular-nums">
+                                {pct(ci.lo)} – {pct(ci.hi)}
+                              </span>
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-1 py-3">
+                          <span
+                            className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-semibold"
+                            style={{ backgroundColor: `${sm.hex}1f`, color: sm.hex }}
+                            title={sm.blurb}
+                          >
+                            {sm.label}
+                          </span>
+                          {needed && p.clickSessions && p.clickSessions < needed && (
+                            <div className="mt-1 text-[10px] text-slate-600 tabular-nums">
+                              behöver ~{nf.format(needed)} för ±10pp
                             </div>
                           )}
                         </td>
@@ -589,6 +633,25 @@ export function LogRocketDashboard({ versions: initialVersions, initialCurrent, 
                 </tbody>
               </table>
             </div>
+
+            {pdp && listicle && (
+              <p className="mt-3 flex gap-2 border-t border-white/5 pt-3 text-[11px] leading-relaxed text-slate-400">
+                <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-500" />
+                {separated(pdp, listicle) ? (
+                  <span>
+                    PDP:ns och listiclens intervall <strong className="text-slate-200">överlappar inte</strong> — skillnaden
+                    i CTA-genomslag håller trots låg volym. Men intervallen är breda, så läs den som “PDP är bättre”,
+                    aldrig som “PDP ligger på {pct(ctaShare(pdp) ?? 0)}”. Och sidorna fick trafik olika länge, vilket
+                    statistiken inte kan reda ut åt oss.
+                  </span>
+                ) : (
+                  <span>
+                    PDP:ns och listiclens intervall <strong className="text-slate-200">överlappar</strong> — skillnaden är
+                    ännu inte bevisad. Vänta på mer volym innan någon sida döms ut.
+                  </span>
+                )}
+              </p>
+            )}
           </Card>
 
           {/* Clicks — period aggregates */}
