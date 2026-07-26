@@ -327,7 +327,7 @@ export function TimeDashboard({ currentUserId }: { currentUserId: string }) {
           <StatCard icon={Layers} label="Pass" value={String(stats.count)} accent="text-violet-400" />
           <StatCard
             icon={Gauge}
-            label="Snitt per pass"
+            label="Snitt per task"
             value={stats.count ? formatDuration(stats.avgSession) : "–"}
             accent="text-emerald-400"
           />
