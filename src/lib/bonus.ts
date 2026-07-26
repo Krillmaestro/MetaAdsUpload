@@ -92,6 +92,80 @@ export function nextTierProgress(spend: number, roas: number, lockedBonus = 0, t
   return { next, current, spendProgress, roasMet, hint };
 }
 
+export interface BonusReadiness extends NextTierProgress {
+  /** Ranking score — higher is closer to earning. See `bonusReadiness`. */
+  score: number;
+  /** What is actually standing in the way. */
+  blocker: "none" | "spend" | "roas" | "both";
+  /** One short line in Swedish: what it takes from here. */
+  requirement: string;
+  /** Spend still needed for the next tier, 0 when already past it. */
+  spendGap: number;
+}
+
+/**
+ * How close an ad set is to its next bonus, and what is missing.
+ *
+ * Ranking rule that matters: an ad set whose ROAS requirement is ALREADY MET
+ * only needs more spend — that is money almost in hand, and delivery alone
+ * gets it there. It must always outrank a high-spend ad set sitting at 0.8
+ * ROAS, which cannot reach the tier at all without the campaign turning
+ * around. Sorting on spend alone (the old behaviour) buried the first group
+ * beneath the second.
+ *
+ * So every ROAS-met ad set scores above every ROAS-short one, and within each
+ * group the nearest by spend comes first.
+ */
+export function bonusReadiness(
+  spend: number,
+  roas: number,
+  lockedBonus = 0,
+  tiers: BonusTier[] = BONUS_TIERS
+): BonusReadiness {
+  const prog = nextTierProgress(spend, roas, lockedBonus, tiers);
+
+  if (!prog.next) {
+    return { ...prog, score: Number.MAX_SAFE_INTEGER, blocker: "none", requirement: "Högsta nivån nådd 🎉", spendGap: 0 };
+  }
+
+  const spendGap = Math.max(0, prog.next.minSpend - spend);
+  const spendMet = spendGap === 0;
+  const blocker: BonusReadiness["blocker"] =
+    prog.roasMet && spendMet ? "none" : prog.roasMet ? "spend" : spendMet ? "roas" : "both";
+
+  const money = (n: number) => `$${Math.round(n).toLocaleString("sv-SE")}`;
+  const requirement =
+    blocker === "none"
+      ? "Kvalificerad — låses vid nästa uppdatering"
+      : blocker === "spend"
+        ? `Behöver ${money(spendGap)} mer spend — ROAS klar`
+        : blocker === "roas"
+          ? `Spend klar — behöver ROAS ${prog.next.minRoas}x (nu ${roas.toFixed(2)}x)`
+          : `Behöver ${money(spendGap)} mer spend och ROAS ${prog.next.minRoas}x (nu ${roas.toFixed(2)}x)`;
+
+  // Two bands that never overlap: ROAS-met ad sets occupy 1000+, the rest stay
+  // below it however much they have spent.
+  const score = prog.roasMet
+    ? 1000 + prog.spendProgress * 1000
+    : prog.spendProgress * 100 * Math.min(roas / prog.next.minRoas, 1);
+
+  return { ...prog, score, blocker, requirement, spendGap };
+}
+
+/** Sort helper: closest to a bonus first. */
+export function byBonusReadiness<T>(
+  get: (item: T) => { spend: number; roas: number; locked?: number },
+  tiers: BonusTier[] = BONUS_TIERS
+) {
+  return (a: T, b: T) => {
+    const A = get(a), B = get(b);
+    return (
+      bonusReadiness(B.spend, B.roas, B.locked ?? 0, tiers).score -
+      bonusReadiness(A.spend, A.roas, A.locked ?? 0, tiers).score
+    );
+  };
+}
+
 /** Tailwind classes for a bonus badge by tier value. Matches the existing palette. */
 export function bonusTierColor(bonus: number): string {
   if (bonus >= 50) return "bg-yellow-500/10 text-yellow-400 border-yellow-500/20";

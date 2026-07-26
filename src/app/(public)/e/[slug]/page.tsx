@@ -5,10 +5,10 @@ import {
   ResponsiveContainer, ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine,
 } from "recharts";
 import {
-  Trophy, DollarSign, TrendingUp, Target, Zap, Clock, CheckCircle2, Lock, Flame, Video, Lightbulb,
+  Trophy, DollarSign, TrendingUp, Target, Zap, Clock, CheckCircle2, Check, Lock, Flame, Video, Lightbulb,
   Gauge, MousePointerClick, ChevronDown, ChevronRight, Layers,
 } from "lucide-react";
-import { nextTierProgress, bonusTierColor, type BonusTier } from "@/lib/bonus";
+import { bonusReadiness, byBonusReadiness, bonusTierColor, BONUS_TIERS, type BonusTier } from "@/lib/bonus";
 
 interface Ad {
   id: string; name: string; spend: number; impressions: number; purchases: number; purchaseValue: number;
@@ -99,15 +99,23 @@ export default function PublicEditorPage({ params }: { params: Promise<{ slug: s
   useEffect(() => { load(); }, [load]);
 
   const editor = data?.editor;
-  const tiers = data?.bonusTiers || [];
+  // Falls back to the built-in ladder so ranking never degrades to "no tiers,
+  // everything looks finished" if the API omits them.
+  const tiers = data?.bonusTiers?.length ? data.bonusTiers : BONUS_TIERS;
 
   const { winners, inflight } = useMemo(() => {
     const sets = editor?.adsets || [];
     return {
       winners: sets.filter((a) => a.bonus > 0).sort((a, b) => b.bonus - a.bonus),
-      inflight: sets.filter((a) => a.bonus === 0 && a.lifetimeSpend > 0).sort((a, b) => b.lifetimeSpend - a.lifetimeSpend).slice(0, 6),
+      // Ranked by how close each ad set is to earning, NOT by spend. An ad set
+      // that already clears the ROAS bar and only needs delivery is nearly
+      // money in hand; a big spender at 0.8 ROAS cannot get there at all.
+      inflight: sets
+        .filter((a) => a.bonus === 0 && a.lifetimeSpend > 0)
+        .sort(byBonusReadiness((a) => ({ spend: a.lifetimeSpend, roas: a.lifetimeRoas, locked: a.bonus }), tiers))
+        .slice(0, 6),
     };
-  }, [editor]);
+  }, [editor, tiers]);
 
   const toggle = (id: string) => setExpanded((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
 
@@ -261,17 +269,29 @@ export default function PublicEditorPage({ params }: { params: Promise<{ slug: s
               <div className="divide-y divide-white/5 max-h-[360px] overflow-y-auto">
                 {inflight.length === 0 && <p className="px-5 py-8 text-center text-sm text-slate-600">No active ad sets near a tier right now.</p>}
                 {inflight.map((s) => {
-                  const prog = nextTierProgress(s.lifetimeSpend, s.lifetimeRoas, s.bonus, tiers);
+                  const prog = bonusReadiness(s.lifetimeSpend, s.lifetimeRoas, s.bonus, tiers);
                   return (
                     <div key={s.adsetId} className="px-5 py-3">
                       <div className="flex items-center justify-between gap-2 mb-1.5">
                         <p className="text-sm text-slate-300 truncate">{s.adsetName}</p>
-                        {prog.next && <span className="shrink-0 text-[11px] font-medium text-cyan-400">→ ${prog.next.bonus}</span>}
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          {/* ROAS cleared = only delivery stands between this and the payout. */}
+                          {prog.roasMet && (
+                            <span className="flex items-center gap-1 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-400">
+                              <Check className="h-2.5 w-2.5" />
+                              ROAS klar
+                            </span>
+                          )}
+                          {prog.next && <span className="text-[11px] font-medium text-cyan-400">→ ${prog.next.bonus}</span>}
+                        </div>
                       </div>
                       <div className="h-1.5 w-full rounded-full bg-white/5 overflow-hidden">
-                        <div className={`h-full rounded-full ${prog.roasMet ? "bg-cyan-400" : "bg-slate-600"}`} style={{ width: `${Math.round(prog.spendProgress * 100)}%` }} />
+                        <div className={`h-full rounded-full ${prog.roasMet ? "bg-emerald-400" : "bg-slate-600"}`} style={{ width: `${Math.round(prog.spendProgress * 100)}%` }} />
                       </div>
-                      <p className="text-[10px] text-slate-500 mt-1">{prog.hint}</p>
+                      <p className={`mt-1 text-[11px] font-medium ${prog.roasMet ? "text-emerald-400/90" : "text-slate-400"}`}>
+                        {prog.requirement}
+                      </p>
+                      <p className="text-[10px] text-slate-600">{prog.hint}</p>
                     </div>
                   );
                 })}
