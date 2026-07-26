@@ -107,6 +107,41 @@ export default function AdSetAnalyzerPage() {
   const [ownersByAdset, setOwnersByAdset] = useState<Record<string, AdsetMeta>>({});
   const [angleOptions, setAngleOptions] = useState<string[]>([]);
   const [problemOptions, setProblemOptions] = useState<string[]>([]);
+  const [accounts, setAccounts] = useState<{ id: string; name: string; currency: string }[]>([]);
+  const [account, setAccount] = useState<string>("");
+
+  // Which ad account to analyse. Without an explicit choice this page reports on
+  // whatever is active in settings — which is how it ended up showing Glimmora
+  // while the editors' work lives in DogDivaCOmain. The pick is remembered, and
+  // DogDivaCO is the default because that is where the video batches run.
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/meta/connection");
+        if (!res.ok) return;
+        const j = await res.json();
+        type Conn = { id: number; isActive?: boolean; adAccounts?: { id: string; name: string; currency: string }[] };
+        const conns: Conn[] = j?.connections ?? [];
+        const conn = conns.find((c) => c.isActive) ?? conns[0];
+        const list = (conn?.adAccounts ?? []).filter((a) => a?.id && a?.name);
+        if (!list.length) return;
+        setAccounts(list);
+        const saved = typeof window !== "undefined" ? localStorage.getItem("adsetAnalyzerAccount") : null;
+        const dogdiva = list.find((a) => /dogdiva/i.test(a.name));
+        const initial =
+          (saved && list.some((a) => a.id === saved) ? saved : null) ??
+          dogdiva?.id ??
+          j?.active?.activeAdAccountId ??
+          list[0].id;
+        setAccount(initial);
+      } catch { /* not connected */ }
+    })();
+  }, []);
+
+  const chooseAccount = useCallback((id: string) => {
+    setAccount(id);
+    try { localStorage.setItem("adsetAnalyzerAccount", id); } catch { /* private mode */ }
+  }, []);
 
   // Team members for the owner picker (admin only — silently empty otherwise).
   useEffect(() => {
@@ -147,8 +182,9 @@ export default function AdSetAnalyzerPage() {
     if (dateMode === "today") params.set("days", "0");
     else if (dateMode === "custom") { params.set("since", customFrom); params.set("until", customTo); }
     else params.set("days", String(presetDays));
+    if (account) params.set("account", account);
     return `/api/evolve/adset-classify?${params}`;
-  }, [dateMode, presetDays, customFrom, customTo]);
+  }, [dateMode, presetDays, customFrom, customTo, account]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -296,6 +332,19 @@ export default function AdSetAnalyzerPage() {
           )}
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          {accounts.length > 0 && (
+            <select
+              value={account}
+              onChange={(e) => chooseAccount(e.target.value)}
+              aria-label="Annonskonto"
+              title="Annonskonto som analyseras"
+              className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-300 [color-scheme:dark]"
+            >
+              {accounts.map((a) => (
+                <option key={a.id} value={a.id}>{a.name} ({a.currency})</option>
+              ))}
+            </select>
+          )}
           {data && data.campaigns.length > 0 && (
             <select
               value={campaignFilter}

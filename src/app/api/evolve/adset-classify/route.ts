@@ -4,6 +4,7 @@ import { getInsights, extractPurchases, extractPurchaseValue, calculateROAS } fr
 import { getAds } from "@/lib/meta/ads";
 import { getCampaigns } from "@/lib/meta/campaigns";
 import { getAdSets } from "@/lib/meta/adsets";
+import { withAdAccount } from "@/lib/meta/client";
 import { getEvolveSettings } from "@/lib/evolve/settings";
 import { classifyAd } from "@/lib/evolve/classifier";
 import { format, subDays, differenceInDays, parseISO } from "date-fns";
@@ -32,6 +33,13 @@ export async function GET(request: NextRequest) {
       until = format(new Date(), "yyyy-MM-dd");
     }
 
+    // Which ad account to analyse. Without this the route silently reports on
+    // whichever account happens to be active in settings, which is how the
+    // analyzer ended up showing Glimmora while the editors' work sits in
+    // DogDivaCOmain. Falsy = keep the connection's active account.
+    const account = searchParams.get("account") || undefined;
+
+    return await withAdAccount(account, async () => {
     const settings = await getEvolveSettings();
 
     // Fetch only ACTIVE entities from Meta — dramatically reduces data volume
@@ -285,6 +293,8 @@ export async function GET(request: NextRequest) {
       campaigns: campaigns
         .filter((c) => c.status === "ACTIVE" && c.id !== settings.graveyardCampaignId)
         .map((c) => ({ id: c.id, name: c.name })),
+      account: account ?? null,
+    });
     });
   } catch (error) {
     console.error("AdSet Classify API error:", error);
