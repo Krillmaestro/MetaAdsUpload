@@ -462,6 +462,15 @@ export const adsetOwners = pgTable("adset_owners", {
   // has its own ad_owners tag (ad-level overrides set-level).
   angle: text("angle"),
   problem: text("problem"),
+  // Read from the ad set name by the parser (src/lib/adset-name.ts).
+  format: text("format"), // VSL | UGC | STATIC | ANIME | NON_NARRATED
+  landing: text("landing"), // "LP6 + LP12"
+  country: text("country"),
+  batch: text("batch"),
+  // Which fields the parser last wrote. A field NOT listed here was set by a
+  // human and is never overwritten by a later run.
+  autoFields: jsonb("auto_fields").$type<string[]>().default([]),
+  autoAssignedAt: timestamp("auto_assigned_at"),
   // Manual verdict, independent of the window-based auto-classification
   verdict: text("verdict"), // "confirmed_winner" | null
   verdictAt: timestamp("verdict_at"),

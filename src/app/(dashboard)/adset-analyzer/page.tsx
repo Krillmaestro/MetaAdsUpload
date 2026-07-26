@@ -19,6 +19,8 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { AdsetOwnerPicker, type TeamMember } from "@/components/editors/adset-owner-picker";
+import { AdsetAutoAssignDialog } from "@/components/editors/adset-auto-assign-dialog";
+import { Wand2 } from "lucide-react";
 
 type Classification = "breakthrough" | "spend_winner" | "kpi_winner" | "loser" | "new";
 
@@ -109,6 +111,7 @@ export default function AdSetAnalyzerPage() {
   const [problemOptions, setProblemOptions] = useState<string[]>([]);
   const [accounts, setAccounts] = useState<{ id: string; name: string; currency: string }[]>([]);
   const [account, setAccount] = useState<string>("");
+  const [autoAssignOpen, setAutoAssignOpen] = useState(false);
 
   // Which ad account to analyse. Without an explicit choice this page reports on
   // whatever is active in settings — which is how it ended up showing Glimmora
@@ -371,12 +374,25 @@ export default function AdSetAnalyzerPage() {
               <Calendar className="h-3.5 w-3.5" />
             </button>
           </div>
+          <button onClick={() => setAutoAssignOpen(true)}
+            title="Läs editor, videotyp, problem och landingpage ur ad set-namnen"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-xs font-medium text-slate-300 hover:bg-white/10 hover:text-white transition-all">
+            <Wand2 className="h-3.5 w-3.5" />
+            Auto-koppla
+          </button>
           <button onClick={fetchData} disabled={loading}
             className="flex items-center px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-sm text-slate-300 hover:bg-white/10 transition-all disabled:opacity-50">
             <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
           </button>
         </div>
       </div>
+
+      <AdsetAutoAssignDialog
+        open={autoAssignOpen}
+        onClose={() => setAutoAssignOpen(false)}
+        account={account}
+        onApplied={fetchData}
+      />
 
       {dateMode === "custom" && (
         <div className="flex items-center gap-3 rounded-xl border border-white/5 bg-[#111827] p-3">
