@@ -34,6 +34,7 @@ import {
   ShoppingBag,
   Rocket,
   Hourglass,
+  MousePointerClick,
 } from "lucide-react";
 import { signOut } from "next-auth/react";
 
@@ -43,10 +44,13 @@ type NavSection = {
   items: { href: string; label: string; icon: React.ComponentType<{ className?: string }> }[];
 };
 
-// Founder-only time tracker — the co-founder may not hold an admin role.
+// Founder-only pages — the co-founder may not hold an admin role.
 const founderSection: NavSection = {
   label: "FOUNDERS",
-  items: [{ href: "/time", label: "Time Tracker", icon: Hourglass }],
+  items: [
+    { href: "/time", label: "Time Tracker", icon: Hourglass },
+    { href: "/logrocket", label: "LogRocket", icon: MousePointerClick },
+  ],
 };
 
 // Video editors get a minimal menu: their workflow + their own public page.

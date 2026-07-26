@@ -5,8 +5,8 @@ import { NextResponse } from "next/server";
 // Everything else redirects to /my-work. APIs guard themselves.
 const EDITOR_PAGE_PREFIXES = ["/my-work", "/timer", "/review", "/e/", "/r/"];
 
-// Founders (co-founder may hold a non-admin role) additionally reach the time tracker.
-const FOUNDER_PAGE_PREFIXES = ["/time"];
+// Founders (co-founder may hold a non-admin role) additionally reach the founder pages.
+const FOUNDER_PAGE_PREFIXES = ["/time", "/logrocket"];
 
 export default auth((req) => {
   const { pathname } = req.nextUrl;
