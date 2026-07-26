@@ -1,4 +1,5 @@
 import { pgTable, text, integer, real, boolean, timestamp, jsonb, serial, varchar, date, index, uniqueIndex, unique } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 // ─── Users & Auth ────────────────────────────────────────────────────────────
 
@@ -813,4 +814,32 @@ export const workSessions = pgTable("work_sessions", {
   index("work_sessions_started_at_idx").on(table.startedAt),
   index("work_sessions_category_id_idx").on(table.categoryId),
   index("work_sessions_status_idx").on(table.status),
+]);
+
+// ─── LogRocket snapshots ─────────────────────────────────────────────────────
+// Every LogRocket pull is stored whole and never overwritten, so the /logrocket
+// page can show any earlier version and diff the current one against it. The
+// payload is validated against `payloadSchema` (src/lib/logrocket-types.ts)
+// before it lands here, which is what lets an old row still render after the
+// shape grows.
+
+export const logrocketSnapshots = pgTable("logrocket_snapshots", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  // Optional human name for the pull ("efter ears1-fixen").
+  label: text("label"),
+  source: text("source").notNull().default("manual"), // mcp | manual | seed
+  // Denormalised off the payload so the version picker sorts without parsing json.
+  windowStart: text("window_start").notNull(),
+  windowEnd: text("window_end").notNull(),
+  payload: jsonb("payload").$type<import("@/lib/logrocket-types").LogRocketPayload>().notNull(),
+  createdBy: text("created_by"),
+  createdByName: text("created_by_name"),
+  capturedAt: timestamp("captured_at").defaultNow().notNull(),
+}, (table) => [
+  index("logrocket_snapshots_captured_at_idx").on(table.capturedAt),
+  // Exactly one seed row, so the auto-seed on an empty table stays idempotent
+  // even if two requests race it.
+  uniqueIndex("logrocket_snapshots_single_seed_idx")
+    .on(table.source)
+    .where(sql`${table.source} = 'seed'`),
 ]);
