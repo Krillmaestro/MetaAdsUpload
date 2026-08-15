@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/auth";
 import { db, schema } from "@/db";
 import { eq } from "drizzle-orm";
 import { sendWhatsApp } from "@/lib/notifications";
+import { guardFounder } from "@/lib/work-tracker";
 
 const STATUSES = ["todo", "in_progress", "done"] as const;
 const PRIORITIES = ["low", "medium", "high", "urgent"] as const;
@@ -12,9 +12,8 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await auth();
-    if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (session.user.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    const { session, error } = await guardFounder();
+    if (error) return error;
 
     const { id } = await params;
     const [existing] = await db.select().from(schema.adminTasks).where(eq(schema.adminTasks.id, id)).limit(1);
@@ -35,12 +34,12 @@ export async function PATCH(
     }
     if (body.assignedToId !== undefined) {
       const [assignee] = await db
-        .select({ id: schema.users.id, role: schema.users.role })
+        .select({ id: schema.users.id, isFounder: schema.users.isFounder })
         .from(schema.users)
         .where(eq(schema.users.id, body.assignedToId))
         .limit(1);
-      if (!assignee || assignee.role !== "admin") {
-        return NextResponse.json({ error: "Assignee must be an admin" }, { status: 400 });
+      if (!assignee || !assignee.isFounder) {
+        return NextResponse.json({ error: "Assignee must be a founder" }, { status: 400 });
       }
       updates.assignedToId = body.assignedToId;
     }
@@ -67,7 +66,7 @@ export async function PATCH(
         .where(eq(schema.users.id, existing.createdById))
         .limit(1);
       if (creator?.phone) {
-        sendWhatsApp(creator.phone, `✅ Task done: ${task.title} (by ${session.user.name || "an admin"})`).catch(() => {});
+        sendWhatsApp(creator.phone, `✅ Task done: ${task.title} (by ${session.user.name || "a founder"})`).catch(() => {});
       }
     }
 
@@ -86,9 +85,8 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await auth();
-    if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (session.user.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    const { error } = await guardFounder();
+    if (error) return error;
 
     const { id } = await params;
     const [deleted] = await db.delete(schema.adminTasks).where(eq(schema.adminTasks.id, id)).returning();

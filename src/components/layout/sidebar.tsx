@@ -50,6 +50,7 @@ const founderSection: NavSection = {
   label: "FOUNDERS",
   items: [
     { href: "/time", label: "Time Tracker", icon: Hourglass },
+    { href: "/tasks", label: "Team Tasks", icon: ListTodo },
     { href: "/logrocket", label: "LogRocket", icon: MousePointerClick },
   ],
 };
@@ -120,7 +121,6 @@ const navSections: NavSection[] = [
       { href: "/my-work", label: "My Work", icon: ClipboardList },
       { href: "/review", label: "Review", icon: Eye },
       { href: "/timer", label: "Timer", icon: Timer },
-      { href: "/tasks", label: "Team Tasks", icon: ListTodo },
     ],
   },
   {

@@ -1,17 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/auth";
 import { db, schema } from "@/db";
 import { eq, inArray, desc, asc } from "drizzle-orm";
 import { sendWhatsApp } from "@/lib/notifications";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { guardFounder } from "@/lib/work-tracker";
 
 const PRIORITIES = ["low", "medium", "high", "urgent"] as const;
 
 export async function GET() {
   try {
-    const session = await auth();
-    if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (session.user.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    const { error } = await guardFounder();
+    if (error) return error;
 
     const tasks = await db
       .select()
@@ -48,9 +47,8 @@ export async function POST(request: NextRequest) {
   if (rateLimitResponse) return rateLimitResponse;
 
   try {
-    const session = await auth();
-    if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (session.user.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    const { session, error } = await guardFounder();
+    if (error) return error;
 
     const body = await request.json();
     const { title, description, assignedToId, priority = "medium", dueDate } = body;
@@ -60,12 +58,12 @@ export async function POST(request: NextRequest) {
     if (!PRIORITIES.includes(priority)) return NextResponse.json({ error: "Invalid priority" }, { status: 400 });
 
     const [assignee] = await db
-      .select({ id: schema.users.id, role: schema.users.role, phone: schema.users.phone, name: schema.users.name })
+      .select({ id: schema.users.id, isFounder: schema.users.isFounder, phone: schema.users.phone })
       .from(schema.users)
       .where(eq(schema.users.id, assignedToId))
       .limit(1);
-    if (!assignee || assignee.role !== "admin") {
-      return NextResponse.json({ error: "Assignee must be an admin" }, { status: 400 });
+    if (!assignee || !assignee.isFounder) {
+      return NextResponse.json({ error: "Assignee must be a founder" }, { status: 400 });
     }
 
     const [task] = await db
@@ -83,7 +81,7 @@ export async function POST(request: NextRequest) {
     // Fire-and-forget WhatsApp ping when assigning a task to someone else
     if (assignee.id !== session.user.id && assignee.phone) {
       const due = task.dueDate ? ` — due ${new Date(task.dueDate).toISOString().slice(0, 10)}` : "";
-      sendWhatsApp(assignee.phone, `📋 New task from ${session.user.name || "an admin"}: ${task.title}${due}`).catch(() => {});
+      sendWhatsApp(assignee.phone, `📋 New task from ${session.user.name || "a founder"}: ${task.title}${due}`).catch(() => {});
     }
 
     return NextResponse.json({ task });

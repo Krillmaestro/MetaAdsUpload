@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import Link from "next/link";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
@@ -27,7 +26,6 @@ import {
   Check,
   RotateCcw,
   Trash2,
-  Timer as TimerIcon,
   Pencil,
   CalendarDays,
   ListTodo,
@@ -51,11 +49,9 @@ interface AdminTask {
   createdAt: string;
 }
 
-interface AdminUser {
+interface Founder {
   id: string;
   name: string;
-  role: string;
-  isActive: boolean;
 }
 
 const PRIORITY_STYLES: Record<AdminTask["priority"], { label: string; className: string }> = {
@@ -95,7 +91,7 @@ export default function TasksPage() {
   }, []);
 
   const [tasks, setTasks] = useState<AdminTask[]>([]);
-  const [admins, setAdmins] = useState<AdminUser[]>([]);
+  const [founders, setFounders] = useState<Founder[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<Filter>("all");
 
@@ -126,13 +122,9 @@ export default function TasksPage() {
 
   useEffect(() => {
     loadTasks();
-    fetch("/api/users")
-      .then((r) => (r.ok ? r.json() : { users: [] }))
-      .then((data) =>
-        setAdmins(
-          (data.users || []).filter((u: AdminUser) => u.role === "admin" && u.isActive)
-        )
-      )
+    fetch("/api/work/people")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data) => setFounders(Array.isArray(data) ? data : []))
       .catch(() => {});
   }, [loadTasks]);
 
@@ -253,7 +245,7 @@ export default function TasksPage() {
             Team Tasks
           </h1>
           <p className="text-sm text-slate-400 mt-0.5">
-            Quick tasks between admins — assign, start, finish.
+            Quick tasks between founders — assign, start, finish.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -388,15 +380,6 @@ export default function TasksPage() {
                         )}
 
                         <div className="ml-auto flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                          {task.status !== "done" && (
-                            <Link
-                              href={`/timer?taskType=OTHER&taskName=${encodeURIComponent(task.title)}`}
-                              className="rounded-md p-1.5 text-slate-500 hover:text-cyan-400 hover:bg-white/5 transition-colors"
-                              title="Track time in Timer"
-                            >
-                              <TimerIcon className="h-3.5 w-3.5" />
-                            </Link>
-                          )}
                           <button
                             onClick={() => openEdit(task)}
                             className="rounded-md p-1.5 text-slate-500 hover:text-white hover:bg-white/5 transition-colors"
@@ -466,10 +449,10 @@ export default function TasksPage() {
                 <Label className="text-slate-300">Assign to</Label>
                 <Select value={assignedToId} onValueChange={setAssignedToId}>
                   <SelectTrigger className="bg-[#0a0e1a] border-white/10 text-white">
-                    <SelectValue placeholder="Pick admin" />
+                    <SelectValue placeholder="Pick founder" />
                   </SelectTrigger>
                   <SelectContent className="bg-[#111827] border-white/10">
-                    {admins.map((a) => (
+                    {founders.map((a) => (
                       <SelectItem key={a.id} value={a.id}>
                         {a.id === myId ? `${a.name} (me)` : a.name}
                       </SelectItem>
