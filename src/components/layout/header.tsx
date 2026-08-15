@@ -11,6 +11,7 @@ const pageTitles: Record<string, string> = {
   "/assignments": "Assignments",
   "/my-work": "My Work",
   "/timer": "Timer",
+  "/tasks": "Team Tasks",
   "/options": "Options",
   "/editors": "Editor Performance",
   "/scorecards": "Editor Scorecards",

@@ -179,6 +179,28 @@ export const timeEntries = pgTable("time_entries", {
   index("time_entries_status_idx").on(table.status),
 ]);
 
+// ─── Admin Tasks ─────────────────────────────────────────────────────────────
+// Lightweight admin-to-admin task board (separate from editor assignments,
+// which drive bonuses/stats and are brief-shaped).
+
+export const adminTasks = pgTable("admin_tasks", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  title: text("title").notNull(),
+  description: text("description"),
+  assignedToId: text("assigned_to_id").notNull(),
+  createdById: text("created_by_id").notNull(),
+  status: text("status").notNull().default("todo"), // todo, in_progress, done
+  priority: text("priority").notNull().default("medium"), // low, medium, high, urgent
+  dueDate: timestamp("due_date"),
+  startedAt: timestamp("started_at"),
+  completedAt: timestamp("completed_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("admin_tasks_assigned_to_id_idx").on(table.assignedToId),
+  index("admin_tasks_status_idx").on(table.status),
+]);
+
 export const templates = pgTable("templates", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),

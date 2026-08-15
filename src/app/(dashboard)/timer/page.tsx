@@ -107,6 +107,8 @@ export default function TimerPage() {
 function TimerPageContent() {
   const searchParams = useSearchParams();
   const assignmentIdParam = searchParams.get("assignmentId");
+  const taskNameParam = searchParams.get("taskName");
+  const taskTypeParam = searchParams.get("taskType");
 
   const [timerState, setTimerState] = useState<TimerState>(loadTimerState);
   const [displayMs, setDisplayMs] = useState(0);
@@ -135,6 +137,16 @@ function TimerPageContent() {
   }, [assignmentIdParam, timerState.assignmentId]);
 
   useEffect(() => { saveTimerState(timerState); }, [timerState]);
+
+  // Prefill from query params (e.g. /timer?taskType=OTHER&taskName=... from Team Tasks)
+  useEffect(() => {
+    if (!taskNameParam) return;
+    setTimerState((prev) => {
+      if (prev.status !== "idle") return prev;
+      const type = taskTypeParam && TASK_TYPES.some((t) => t.value === taskTypeParam) ? taskTypeParam : "OTHER";
+      return { ...prev, taskName: taskNameParam, taskType: type, assignmentId: null };
+    });
+  }, [taskNameParam, taskTypeParam]);
 
   useEffect(() => {
     if (timerState.status === "running" && timerState.startedAt) {
