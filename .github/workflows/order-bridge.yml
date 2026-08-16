@@ -1,0 +1,21 @@
+name: Order Bridge (gamla -> nya ApotekHunden)
+
+on:
+  schedule:
+    # 04:30 och 14:30 UTC = 06:30 och 16:30 svensk sommartid
+    - cron: "30 4,14 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  bridge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Spegla oskickade prenumerationsordrar
+        env:
+          OLD_CLIENT_ID: ${{ secrets.BRIDGE_OLD_CLIENT_ID }}
+          OLD_CLIENT_SECRET: ${{ secrets.BRIDGE_OLD_CLIENT_SECRET }}
+          NEW_CLIENT_ID: ${{ secrets.BRIDGE_NEW_CLIENT_ID }}
+          NEW_CLIENT_SECRET: ${{ secrets.BRIDGE_NEW_CLIENT_SECRET }}
+        run: python3 scripts/order-bridge.py
