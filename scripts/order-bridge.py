@@ -25,6 +25,9 @@ TITLE_MAP = {
 }
 SKIP_TITLES = {"Leverans skydd"}  # fraktskydd: ingen fysisk vara, tas med som custom-rad
 
+# Nya butikens standardfraktsätt — speglade ordrar ska se ut som vanliga ordrar för 3PL
+NEW_SHIPPING_TITLE = "Hållbar leverans till postlåda/dörr. ( 1 - 3 dagars leveranstid )"
+
 def env(k):
     if k in os.environ:
         return os.environ[k]
@@ -99,6 +102,8 @@ def main():
     new_tok = get_token(NEW_SHOP, env("NEW_CLIENT_ID"), env("NEW_CLIENT_SECRET"))
 
     q = f"fulfillment_status:unfulfilled financial_status:paid created_at:>{CUTOFF} -tag:bridged"
+    if "--query" in sys.argv:
+        q = sys.argv[sys.argv.index("--query") + 1]
     data = gql(OLD_SHOP, old_tok, ORDERS_QUERY, {"q": q})
     orders = data.get("data", {}).get("orders", {}).get("nodes", [])
     print(f"{len(orders)} ordrar att spegla (limit {limit})")
@@ -119,7 +124,8 @@ def main():
                                    "priceSet": price, "requiresShipping": False})
             elif li["title"] in TITLE_MAP:
                 line_items.append({"variantId": TITLE_MAP[li["title"]],
-                                   "quantity": li["quantity"], "priceSet": price})
+                                   "quantity": li["quantity"], "priceSet": price,
+                                   "requiresShipping": True})
             else:
                 unknown = li["title"]
         if unknown:
@@ -139,11 +145,10 @@ def main():
             "billingAddress": addr(o.get("billingAddress") or o.get("shippingAddress")),
         }
         sl = o.get("shippingLine")
-        if sl:
-            order_input["shippingLines"] = [{
-                "title": sl["title"],
-                "priceSet": {"shopMoney": {"amount": sl["originalPriceSet"]["shopMoney"]["amount"],
-                                           "currencyCode": cur}}}]
+        ship_amount = sl["originalPriceSet"]["shopMoney"]["amount"] if sl else "0.0"
+        order_input["shippingLines"] = [{
+            "title": NEW_SHIPPING_TITLE,
+            "priceSet": {"shopMoney": {"amount": ship_amount, "currencyCode": cur}}}]
         order_input = {k: v for k, v in order_input.items() if v is not None}
 
         if dry:
