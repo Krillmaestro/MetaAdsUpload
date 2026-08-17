@@ -41,18 +41,22 @@ async function handle(request: NextRequest) {
     // manual runs where the caller accepts the timeout risk.
     const mode = request.nextUrl.searchParams.get("mode") ?? "editor";
     if (mode === "accounts") {
-      const accountSync = await runSync();
+      // Auto-assign runs FIRST: runSync regularly eats the whole 300s budget
+      // and the function is killed mid-run, so anything after it never
+      // executes. That starved auto-assign every night — new ad sets sat
+      // without owners and the editor pages stopped picking up new videos.
       const autoAssign = await autoAssignSafely();
+      const accountSync = await runSync();
       return NextResponse.json({ success: true, accountSync, autoAssign });
     }
     if (mode === "all") {
+      const autoAssign = await autoAssignSafely();
       let accountSync: unknown = null;
       try {
         accountSync = await runSync();
       } catch (e) {
         accountSync = { error: e instanceof Error ? e.message : String(e) };
       }
-      const autoAssign = await autoAssignSafely();
       const synced = await runEditorInsightsSync();
       return NextResponse.json({ success: true, accountSync, autoAssign, synced });
     }
