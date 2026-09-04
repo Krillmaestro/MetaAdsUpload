@@ -210,7 +210,7 @@ export function LinkPicker(props: Props) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl bg-[#0d1117] border-white/10">
+      <DialogContent className="w-[92vw] sm:max-w-2xl bg-[#0d1117] border-white/10">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-white">
             <Link2 className="h-4 w-4 text-cyan-400" />

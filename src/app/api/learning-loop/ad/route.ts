@@ -4,13 +4,22 @@ import { db, schema } from "@/db";
 import { inArray } from "drizzle-orm";
 import { guardAdmin } from "@/lib/auth-helpers";
 import { applyAdLinks, unlinkAds } from "@/lib/learning-loop/link";
-import { VERDICTS } from "@/lib/learning-loop/rows";
+import { VERDICTS, learningToText, hasLearning } from "@/lib/learning-loop/rows";
+
+const learningSchema = z.object({
+  whatHappened: z.string().max(4000).default(""),
+  why: z.string().max(4000).default(""),
+  learning: z.string().max(4000).default(""),
+  next: z.string().max(4000).default(""),
+  drivers: z.array(z.string().max(30)).max(10).default([]),
+});
 
 const body = z.object({
   /** Every ad that IS this creative (copies in other ad sets included) — all get the same values. */
   adIds: z.array(z.string().min(1)).min(1).max(100),
   verdict: z.enum(VERDICTS as [string, ...string[]]).nullable().optional(),
   learnings: z.string().max(10000).nullable().optional(),
+  learning: learningSchema.nullable().optional(),
   script: z.string().max(20000).nullable().optional(),
   hookLabel: z.string().max(10).nullable().optional(),
   /** string = link to that brief, null = unlink, undefined = untouched */
@@ -32,6 +41,12 @@ export async function PATCH(request: NextRequest) {
     const set: Record<string, unknown> = { updatedAt: now };
     if (b.verdict !== undefined) { set.verdict = b.verdict; set.verdictAt = b.verdict ? now : null; }
     if (b.learnings !== undefined) { set.learnings = b.learnings?.trim() || null; set.learningsAt = b.learnings?.trim() ? now : null; }
+    if (b.learning !== undefined) {
+      const note = b.learning && hasLearning(b.learning) ? b.learning : null;
+      set.learning = note;
+      set.learnings = learningToText(note);
+      set.learningsAt = note ? now : null;
+    }
     if (b.script !== undefined) set.script = b.script?.trim() || null;
     if (b.hookLabel !== undefined) set.hookLabel = b.hookLabel?.trim().toUpperCase() || null;
     if (b.originAdsetId !== undefined) { set.originAdsetId = b.originAdsetId || null; set.originSource = b.originAdsetId ? "manual" : null; }

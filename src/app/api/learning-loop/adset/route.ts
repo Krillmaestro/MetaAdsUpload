@@ -4,7 +4,15 @@ import { db, schema } from "@/db";
 import { eq } from "drizzle-orm";
 import { guardAdmin } from "@/lib/auth-helpers";
 import { applyLinks, unlinkAdset } from "@/lib/learning-loop/link";
-import { VERDICTS } from "@/lib/learning-loop/rows";
+import { VERDICTS, learningToText, hasLearning } from "@/lib/learning-loop/rows";
+
+const learningSchema = z.object({
+  whatHappened: z.string().max(4000).default(""),
+  why: z.string().max(4000).default(""),
+  learning: z.string().max(4000).default(""),
+  next: z.string().max(4000).default(""),
+  drivers: z.array(z.string().max(30)).max(10).default([]),
+});
 
 const body = z.object({
   adsetId: z.string().min(1),
@@ -12,6 +20,8 @@ const body = z.object({
   campaignId: z.string().nullable().optional(),
   verdict: z.enum(VERDICTS as [string, ...string[]]).nullable().optional(),
   learnings: z.string().max(10000).nullable().optional(),
+  /** Structured note; null clears it (and the text rendering). */
+  learning: learningSchema.nullable().optional(),
   /** string = link to that assignment, null = unlink, undefined = untouched */
   assignmentId: z.string().nullable().optional(),
   problem: z.string().nullable().optional(),
@@ -34,6 +44,12 @@ export async function PATCH(request: NextRequest) {
     const set: Record<string, unknown> = { updatedAt: now };
     if (b.verdict !== undefined) { set.verdict = b.verdict; set.verdictAt = b.verdict ? now : null; }
     if (b.learnings !== undefined) { set.learnings = b.learnings?.trim() || null; set.learningsAt = b.learnings?.trim() ? now : null; }
+    if (b.learning !== undefined) {
+      const note = b.learning && hasLearning(b.learning) ? b.learning : null;
+      set.learning = note;
+      set.learnings = learningToText(note);
+      set.learningsAt = note ? now : null;
+    }
     if (b.problem !== undefined) set.problem = b.problem || null;
     if (b.angle !== undefined) set.angle = b.angle || null;
 

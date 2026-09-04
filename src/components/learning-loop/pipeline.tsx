@@ -52,8 +52,8 @@ export function Pipeline({ pipeline, onChanged }: { pipeline: PipelineAssignment
 
   return (
     <div className="rounded-xl border border-white/5 bg-[#111827]">
-      <button type="button" onClick={() => setOpen((o) => !o)} className="flex w-full items-center justify-between px-4 py-3 text-left">
-        <div className="flex items-center gap-3">
+      <div className="flex items-center justify-between px-4 py-3">
+        <button type="button" onClick={() => setOpen((o) => !o)} className="flex flex-1 items-center gap-3 text-left">
           <ChevronDown className={cn("h-4 w-4 text-slate-500 transition-transform", open && "rotate-180")} />
           <span className="text-sm font-semibold text-white">Pipeline</span>
           <span className="text-xs text-slate-500">{pipeline.length} briefs utan ad set</span>
@@ -62,18 +62,18 @@ export function Pipeline({ pipeline, onChanged }: { pipeline: PipelineAssignment
               {pipeline.filter((p) => p.status === "posted").length} postade men okopplade
             </span>
           )}
-        </div>
+        </button>
         {safeCount > 0 && (
-          <span
-            role="button"
-            onClick={(e) => { e.stopPropagation(); autoLink(); }}
+          <button
+            type="button"
+            onClick={autoLink}
             className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-300 hover:bg-emerald-500/20"
           >
             {autoLinking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
             Koppla {safeCount} säkra
-          </span>
+          </button>
         )}
-      </button>
+      </div>
 
       {open && (
         <div className="divide-y divide-white/[0.04] border-t border-white/5">

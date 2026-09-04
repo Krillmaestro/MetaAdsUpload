@@ -9,7 +9,7 @@ import type { LearningLoopRow } from "@/lib/learning-loop/rows";
 import { CLASSIFICATION_CONFIG } from "@/lib/evolve/classifier";
 import { fmtMoney, fmtNum, fmtPct, fmtX, fmtDate, AWARENESS_LEVELS, STATUS_LABEL, ROLE_CONFIG } from "./format";
 import { VerdictSelect } from "./verdict-select";
-import { LearningsEditor } from "./learnings-editor";
+import { LearningDialog, LearningSummary } from "./learning-dialog";
 import { LinkPicker } from "./link-picker";
 
 function Stat({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent?: string }) {
@@ -48,6 +48,7 @@ export function RowDetails({
   onJumpToAdset?: (adsetId: string) => void;
 }) {
   const [picker, setPicker] = useState(false);
+  const [learningOpen, setLearningOpen] = useState(false);
   const [unlinking, setUnlinking] = useState(false);
   const cls = CLASSIFICATION_CONFIG[row.classification];
   const a = row.assignment;
@@ -287,10 +288,38 @@ export function RowDetails({
           <h4 className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Verdict &amp; lärdom</h4>
           <VerdictSelect adsetId={row.adsetId} adsetName={row.name} campaignId={row.campaignId} value={row.verdict} size="md" onChange={(v) => onPatch({ verdict: v as LearningLoopRow["verdict"], verdictAt: v ? new Date().toISOString() : null })} />
         </div>
-        <LearningsEditor adsetId={row.adsetId} adsetName={row.name} campaignId={row.campaignId} value={row.learnings} rows={7} onSaved={(v) => onPatch({ learnings: v, learningsAt: v ? new Date().toISOString() : null })} />
-        {row.learningsAt && <div className="text-[10px] text-slate-600">Senast uppdaterad {fmtDate(row.learningsAt)}</div>}
+        <LearningSummary note={row.learning} learningsAt={row.learningsAt} onEdit={() => setLearningOpen(true)} />
         {row.graveyardOutcome && <div className="text-[11px] text-slate-500">Graveyard-utfall: <span className="text-slate-300">{row.graveyardOutcome}</span></div>}
       </div>
+
+      {learningOpen && (
+        <LearningDialog
+          open={learningOpen}
+          onOpenChange={setLearningOpen}
+          target={{ kind: "adset", adsetId: row.adsetId, adsetName: row.name, campaignId: row.campaignId }}
+          context={{
+            name: row.name,
+            assignment: row.assignment,
+            window: row.window,
+            lifetime: row.lifetime,
+            classification: row.classification,
+            recommendation: row.recommendation,
+            ownSpend: row.own.window.spend,
+            scaledSpend: row.scaled.window.spend,
+            copies: row.scaled.copies.length,
+            editorId: row.editorId,
+            productLine: row.productLine,
+            format: row.format,
+            problem: row.problem,
+            landing: row.landing,
+          }}
+          currency={currency}
+          targetRoas={targetRoas}
+          value={row.learning}
+          verdict={row.verdict}
+          onSaved={(note, verdict) => onPatch({ learning: note, learnings: note ? [note.whatHappened, note.why, note.learning, note.next].filter(Boolean).join(" · ") : null, learningsAt: note ? new Date().toISOString() : null, verdict, verdictAt: verdict ? new Date().toISOString() : null })}
+        />
+      )}
 
       {picker && (
         <LinkPicker

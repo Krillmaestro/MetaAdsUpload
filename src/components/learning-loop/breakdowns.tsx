@@ -15,6 +15,7 @@ const DIMENSIONS: Array<{ key: string; label: string }> = [
   { key: "landing", label: "Landing" },
   { key: "roleLabel", label: "Lager" },
   { key: "adType", label: "Ideation/Iteration" },
+  { key: "driver", label: "Drivkraft" },
 ];
 
 /**

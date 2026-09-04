@@ -462,6 +462,33 @@ export const editorPayouts = pgTable("editor_payouts", {
   index("editor_payouts_status_idx").on(table.status),
 ]);
 
+// ─── Learning Loop: structured learning + journal ───────────────────────────
+
+export interface LearningNote {
+  whatHappened: string; // the result, in words
+  why: string; // why it worked / did not
+  learning: string; // the transferable insight
+  next: string; // what to test next
+  drivers: string[]; // hook | script | offer | landing | format | audience | visual | timing
+}
+
+// The Growth Guide's "Meta Ads Log": one dated note per day plus a weekly
+// recap. Kept per ad account so DogDivaCO and Glimmora do not mix.
+export const loopJournal = pgTable("loop_journal", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  adAccountId: text("ad_account_id"),
+  entryDate: date("entry_date").notNull(),
+  kind: text("kind").notNull().default("note"), // "note" | "weekly_recap"
+  title: text("title"),
+  body: text("body").notNull(),
+  authorId: text("author_id"),
+  authorName: text("author_name"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("loop_journal_date_idx").on(table.entryDate),
+]);
+
 // ─── Ad Ownership ───────────────────────────────────────────────────────────
 // Direct mapping of a Meta ad → its owning video editor (bonus owner) and the
 // creative strategist (tracked for stats only). Set either at upload time or via
@@ -506,6 +533,7 @@ export const adOwners = pgTable("ad_owners", {
   verdictAt: timestamp("verdict_at"),
   learnings: text("learnings"),
   learningsAt: timestamp("learnings_at"),
+  learning: jsonb("learning").$type<LearningNote>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => [
@@ -555,8 +583,12 @@ export const adsetOwners = pgTable("adset_owners", {
   assignmentId: text("assignment_id"),
   linkSource: text("link_source"), // "publish" | "auto" | "manual"
   linkedAt: timestamp("linked_at"),
-  learnings: text("learnings"), // what we learned — the whole point of the loop
+  learnings: text("learnings"), // plain-text rendering of `learning` (search, older views)
   learningsAt: timestamp("learnings_at"),
+  // Structured learning — the Growth Guide's Results/Learnings columns, but
+  // split so each piece can be reused: what happened, why, the transferable
+  // insight, the next test, and which element drove the result.
+  learning: jsonb("learning").$type<LearningNote>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => [

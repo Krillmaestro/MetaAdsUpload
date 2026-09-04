@@ -9,7 +9,7 @@ import type { CreativeRow } from "@/lib/learning-loop/rows";
 import { CLASSIFICATION_CONFIG } from "@/lib/evolve/classifier";
 import { fmtMoney, fmtNum, fmtPct, fmtX, fmtDate, AWARENESS_LEVELS, STATUS_LABEL, ROLE_CONFIG } from "./format";
 import { VerdictSelect } from "./verdict-select";
-import { LearningsEditor } from "./learnings-editor";
+import { LearningDialog, LearningSummary } from "./learning-dialog";
 import { LinkPicker } from "./link-picker";
 
 function Stat({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent?: string }) {
@@ -94,6 +94,7 @@ export function CreativeDetails({
 }) {
   const [picker, setPicker] = useState(false);
   const [originPicker, setOriginPicker] = useState(false);
+  const [learningOpen, setLearningOpen] = useState(false);
   const [busy, setBusy] = useState<"unlink" | "suggest" | "origin" | null>(null);
   const cls = CLASSIFICATION_CONFIG[row.classification];
   const a = row.assignment;
@@ -289,9 +290,34 @@ export function CreativeDetails({
           <h4 className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Verdict &amp; lärdom</h4>
           <VerdictSelect adIds={row.adIds} value={row.verdict} size="md" onChange={(v) => onPatch({ verdict: v as CreativeRow["verdict"], verdictAt: v ? new Date().toISOString() : null })} />
         </div>
-        <LearningsEditor adIds={row.adIds} value={row.learnings} rows={9} onSaved={(v) => onPatch({ learnings: v, learningsAt: v ? new Date().toISOString() : null })} />
-        {row.learningsAt && <div className="text-[10px] text-slate-600">Senast uppdaterad {fmtDate(row.learningsAt)}</div>}
+        <LearningSummary note={row.learning} learningsAt={row.learningsAt} onEdit={() => setLearningOpen(true)} />
       </div>
+
+      {learningOpen && (
+        <LearningDialog
+          open={learningOpen}
+          onOpenChange={setLearningOpen}
+          target={{ kind: "creative", adIds: row.adIds }}
+          context={{
+            name: row.name,
+            hookLabel: row.hookLabel,
+            assignment: row.assignment,
+            window: row.window,
+            lifetime: row.lifetime,
+            classification: row.classification,
+            recommendation: row.recommendation,
+            productLine: row.productLine,
+            format: row.format,
+            problem: row.problem,
+            landing: row.landing,
+          }}
+          currency={currency}
+          targetRoas={targetRoas}
+          value={row.learning}
+          verdict={row.verdict}
+          onSaved={(note, verdict) => onPatch({ learning: note, learnings: note ? [note.whatHappened, note.why, note.learning, note.next].filter(Boolean).join(" · ") : null, learningsAt: note ? new Date().toISOString() : null, verdict, verdictAt: verdict ? new Date().toISOString() : null })}
+        />
+      )}
 
       {picker && (
         <LinkPicker mode="creative" adIds={row.adIds} creativeName={row.name} open={picker} onOpenChange={setPicker} onLinked={() => { setPicker(false); onRefresh(); }} />

@@ -27,6 +27,7 @@ import { Pipeline } from "@/components/learning-loop/pipeline";
 import { RowDetails } from "@/components/learning-loop/row-details";
 import { VerdictSelect } from "@/components/learning-loop/verdict-select";
 import { CreativesView } from "@/components/learning-loop/creatives-view";
+import { Journal } from "@/components/learning-loop/journal";
 import { Kpi } from "@/components/learning-loop/kpi";
 import { EMPTY_FILTERS, FilterBar, filterOptions, matchesFilters, type Filters } from "@/components/learning-loop/filters";
 import { fmtMoney, fmtNum, fmtPct, fmtX, ROLE_CONFIG } from "@/components/learning-loop/format";
@@ -237,6 +238,7 @@ export default function LearningLoopPage() {
         </div>
       ) : data ? (
         <>
+          <Journal account={effectiveAccount} data={data} currency={currency} />
           {view === "creatives" ? (
             <>
               <Pipeline pipeline={data.pipeline} onChanged={() => fetchData(true)} />

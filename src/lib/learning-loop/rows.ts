@@ -49,6 +49,40 @@ import {
   type LinkProposal,
 } from "./link";
 
+import type { LearningNote } from "@/db/schema";
+export type { LearningNote };
+
+export const LEARNING_DRIVERS: Array<{ key: string; label: string }> = [
+  { key: "hook", label: "Hook" },
+  { key: "script", label: "Script / body" },
+  { key: "offer", label: "Erbjudande" },
+  { key: "landing", label: "Landing page" },
+  { key: "format", label: "Format" },
+  { key: "audience", label: "Målgrupp / awareness" },
+  { key: "visual", label: "Visuellt / klipp" },
+  { key: "timing", label: "Timing / budget" },
+];
+
+export function emptyLearning(): LearningNote {
+  return { whatHappened: "", why: "", learning: "", next: "", drivers: [] };
+}
+
+/** Plain-text rendering of a structured note — what `learnings` (text) stores. */
+export function learningToText(n: LearningNote | null | undefined): string | null {
+  if (!n) return null;
+  const parts: string[] = [];
+  if (n.whatHappened?.trim()) parts.push(`Vad hände: ${n.whatHappened.trim()}`);
+  if (n.why?.trim()) parts.push(`Varför: ${n.why.trim()}`);
+  if (n.learning?.trim()) parts.push(`Lärdom: ${n.learning.trim()}`);
+  if (n.next?.trim()) parts.push(`Nästa: ${n.next.trim()}`);
+  if (n.drivers?.length) parts.push(`Drivkraft: ${n.drivers.map((d) => LEARNING_DRIVERS.find((x) => x.key === d)?.label ?? d).join(", ")}`);
+  return parts.length ? parts.join("\n") : null;
+}
+
+export function hasLearning(n: LearningNote | null | undefined): boolean {
+  return !!n && (!!n.whatHappened?.trim() || !!n.why?.trim() || !!n.learning?.trim() || !!n.next?.trim() || (n.drivers?.length ?? 0) > 0);
+}
+
 export type Period = "7d" | "14d" | "30d" | "90d" | "lifetime";
 export const PERIODS: Period[] = ["7d", "14d", "30d", "90d", "lifetime"];
 export type Verdict = "confirmed_winner" | "loser" | "iterate" | "inconclusive";
@@ -147,6 +181,7 @@ export interface LearningLoopRow {
   verdictAt: string | null;
   learnings: string | null;
   learningsAt: string | null;
+  learning: LearningNote | null;
   graveyardOutcome: string | null;
   outcome: Outcome;
   judged: boolean;
@@ -259,6 +294,7 @@ export interface CreativeRow {
   verdictAt: string | null;
   learnings: string | null;
   learningsAt: string | null;
+  learning: LearningNote | null;
   outcome: Outcome;
   judged: boolean;
   ads: CreativeAdRef[];
@@ -339,6 +375,7 @@ export const BREAKDOWN_DIMENSIONS: Array<{ key: string; label: string }> = [
   { key: "landing", label: "Landing" },
   { key: "roleLabel", label: "Lager" },
   { key: "adType", label: "Ideation/Iteration" },
+  { key: "driver", label: "Drivkraft (ur lärdomar)" },
 ];
 
 // ─── Context ─────────────────────────────────────────────────────────────────
@@ -598,6 +635,7 @@ interface BreakdownSource {
   outcome: Outcome;
   window: { spend: number; purchases: number; purchaseValue: number };
   learnings: string | null;
+  learning?: LearningNote | null;
   ncRoas?: number | null;
 }
 
@@ -606,18 +644,28 @@ function computeBreakdowns(rows: BreakdownSource[]): Record<string, BreakdownRow
   for (const dim of BREAKDOWN_DIMENSIONS) {
     const groups = new Map<string, BreakdownRow>();
     for (const r of rows) {
-      const raw = dim.key === "adType" ? r.assignment?.adType ?? null : (r as unknown as Record<string, unknown>)[dim.key];
-      const key = typeof raw === "string" && raw.trim() ? raw.trim() : "—";
-      const g = groups.get(key) ?? { key, label: key, tests: 0, live: 0, judged: 0, winners: 0, losers: 0, hitRate: 0, spend: 0, purchases: 0, purchaseValue: 0, roas: 0, cpa: 0 };
-      g.tests += 1;
-      if (r.isLive) g.live += 1;
-      if (r.judged) g.judged += 1;
-      if (r.outcome === "winner") g.winners += 1;
-      if (r.outcome === "loser") g.losers += 1;
-      g.spend += r.window.spend;
-      g.purchases += r.window.purchases;
-      g.purchaseValue += r.window.purchaseValue;
-      groups.set(key, g);
+      // Drivers are multi-valued (a hook AND a landing page can drive one win);
+      // each driver gets the row. Rows without a note are left out of that dimension.
+      let keys: string[];
+      if (dim.key === "driver") {
+        keys = (r.learning?.drivers ?? []).map((d) => LEARNING_DRIVERS.find((x) => x.key === d)?.label ?? d);
+        if (!keys.length) continue;
+      } else {
+        const raw = dim.key === "adType" ? r.assignment?.adType ?? null : (r as unknown as Record<string, unknown>)[dim.key];
+        keys = [typeof raw === "string" && raw.trim() ? raw.trim() : "—"];
+      }
+      for (const key of keys) {
+        const g = groups.get(key) ?? { key, label: key, tests: 0, live: 0, judged: 0, winners: 0, losers: 0, hitRate: 0, spend: 0, purchases: 0, purchaseValue: 0, roas: 0, cpa: 0 };
+        g.tests += 1;
+        if (r.isLive) g.live += 1;
+        if (r.judged) g.judged += 1;
+        if (r.outcome === "winner") g.winners += 1;
+        if (r.outcome === "loser") g.losers += 1;
+        g.spend += r.window.spend;
+        g.purchases += r.window.purchases;
+        g.purchaseValue += r.window.purchaseValue;
+        groups.set(key, g);
+      }
     }
     breakdowns[dim.key] = [...groups.values()]
       .map((g) => ({
@@ -653,7 +701,7 @@ function computeSummary(rows: BreakdownSource[], pipeline = 0, unlinkedPosted = 
     hitRate: judged > 0 ? (winners / judged) * 100 : 0,
     pipeline,
     unlinkedPosted,
-    withLearnings: rows.filter((r) => r.learnings && r.learnings.trim()).length,
+    withLearnings: rows.filter((r) => hasLearning(r.learning) || (r.learnings && r.learnings.trim())).length,
   };
 }
 
@@ -987,6 +1035,7 @@ export async function buildLearningLoop(opts: BuildOptions = {}): Promise<Learni
       verdictAt: owner?.verdictAt ? new Date(owner.verdictAt).toISOString() : null,
       learnings: owner?.learnings ?? null,
       learningsAt: owner?.learningsAt ? new Date(owner.learningsAt).toISOString() : null,
+      learning: (owner?.learning as LearningNote | null) ?? null,
       graveyardOutcome: owner?.graveyardOutcome ?? null,
       outcome: judgedInfo.outcome,
       judged: judgedInfo.judged,
@@ -1187,6 +1236,7 @@ export async function buildCreativeLoop(opts: BuildOptions = {}): Promise<Creati
       verdictAt: firstOwnerWith("verdictAt") ? new Date(firstOwnerWith("verdictAt") as Date).toISOString() : null,
       learnings: firstOwnerWith("learnings"),
       learningsAt: firstOwnerWith("learningsAt") ? new Date(firstOwnerWith("learningsAt") as Date).toISOString() : null,
+      learning: (firstOwnerWith("learning") as LearningNote | null) ?? null,
       outcome,
       judged,
       ads,
