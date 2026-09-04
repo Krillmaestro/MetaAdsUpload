@@ -132,6 +132,15 @@ export const assignments = pgTable("assignments", {
   metaCampaignId: text("meta_campaign_id"),
   metaPostId: text("meta_post_id"), // effective_object_story_id for post ID preservation
   currentVersionId: text("current_version_id"), // FK → deliverable_versions
+  // ─── Learning Loop: the brief is a TEST. Hypothesis goes in here, the
+  // result comes back from the ad set(s) it runs in (adset_owners.assignmentId).
+  problemId: text("problem_id"),
+  hypothesis: text("hypothesis"), // WHY are we making this ad / what do we expect to happen
+  variableTested: text("variable_tested"), // the ONE thing this test changes vs. what exists
+  adType: text("ad_type"), // "ideation" | "iteration"
+  iterationOfId: text("iteration_of_id"), // parent assignment when adType = "iteration"
+  awarenessLevel: text("awareness_level"), // unaware | problem_aware | solution_aware | product_aware | most_aware
+  publishTemplateId: integer("publish_template_id"), // uploader template (templates.id) this brief publishes with
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => [
@@ -156,6 +165,22 @@ export const briefTemplates = pgTable("brief_templates", {
   priority: text("priority").default("medium"),
   references: jsonb("references").$type<Array<{ id: string; kind: "url" | "library" | "file"; value: string; label?: string; note?: string }>>().default([]),
   scriptContent: jsonb("script_content").$type<{ hooks: Array<{ id: string; label: string; eng: string; se: string }>; body: { eng: string; se: string } }>(),
+  // A template is meant to fill the WHOLE form ("Probiotika LP12 + PP" → product,
+  // landing, editor, strategist, hypothesis, publish template…), so every
+  // assignment field that recurs between briefs lives here too.
+  problemId: text("problem_id"),
+  landingPage: text("landing_page"),
+  assignedToId: text("assigned_to_id"),
+  creativeStrategistId: text("creative_strategist_id"),
+  creativeStrategistName: text("creative_strategist_name"),
+  description: text("description"),
+  hypothesis: text("hypothesis"),
+  variableTested: text("variable_tested"),
+  adType: text("ad_type"),
+  awarenessLevel: text("awareness_level"),
+  publishTemplateId: integer("publish_template_id"),
+  useCount: integer("use_count").default(0).notNull(),
+  lastUsedAt: timestamp("last_used_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -309,6 +334,8 @@ export const adsetsCache = pgTable("adsets_cache", {
   bidStrategy: text("bid_strategy"),
   startTime: timestamp("start_time"),
   endTime: timestamp("end_time"),
+  createdTime: timestamp("created_time"), // when Meta created the ad set — "days live" starts here
+  effectiveStatus: text("effective_status"),
   syncedAt: timestamp("synced_at").defaultNow().notNull(),
 }, (table) => [
   index("adsets_cache_campaign_id_idx").on(table.campaignId),
@@ -460,12 +487,26 @@ export const adOwners = pgTable("ad_owners", {
   graveyardAt: timestamp("graveyard_at"),
   source: text("source").default("analyzer"), // "uploader" | "analyzer" | "import"
   assignedById: text("assigned_by_id"), // admin who set the owner
+  // ─── Learning Loop, creative level ───
+  // In CBO scaling campaigns one ad set holds the winners from many briefs,
+  // so the loop has to close per CREATIVE too. These mirror adset_owners'
+  // loop columns; an ad without its own link inherits its ad set's.
+  assignmentId: text("assignment_id"),
+  linkSource: text("link_source"), // "auto" | "manual"
+  linkedAt: timestamp("linked_at"),
+  hookLabel: text("hook_label"), // "H2" — which hook variant of the brief's script this ad is
+  script: text("script"), // the creative's own script text when it is not (only) the brief's
+  verdict: text("verdict"), // "confirmed_winner" | "loser" | "iterate" | "inconclusive" | null
+  verdictAt: timestamp("verdict_at"),
+  learnings: text("learnings"),
+  learningsAt: timestamp("learnings_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => [
   index("ad_owners_video_editor_idx").on(table.videoEditorId),
   index("ad_owners_strategist_idx").on(table.creativeStrategistId),
   index("ad_owners_template_idx").on(table.templateId),
+  index("ad_owners_assignment_idx").on(table.assignmentId),
 ]);
 
 // ─── Ad Set Ownership ───────────────────────────────────────────────────────
@@ -494,18 +535,28 @@ export const adsetOwners = pgTable("adset_owners", {
   autoFields: jsonb("auto_fields").$type<string[]>().default([]),
   autoAssignedAt: timestamp("auto_assigned_at"),
   // Manual verdict, independent of the window-based auto-classification
-  verdict: text("verdict"), // "confirmed_winner" | null
+  verdict: text("verdict"), // "confirmed_winner" | "loser" | "iterate" | "inconclusive" | null
   verdictAt: timestamp("verdict_at"),
   graveyardOutcome: text("graveyard_outcome"), // "spend_winner" | "loser"
   graveyardAt: timestamp("graveyard_at"),
   source: text("source").default("analyzer"), // "uploader" | "analyzer"
   assignedById: text("assigned_by_id"),
   backfilledAt: timestamp("backfilled_at"), // lifetime insights pulled from Meta (set once)
+  // ─── Learning Loop ───
+  // The brief this ad set runs. Many ad sets (testing set, scaling copy,
+  // graveyard copy) point at ONE assignment, so the creative's true lifetime
+  // result is the sum over all of them.
+  assignmentId: text("assignment_id"),
+  linkSource: text("link_source"), // "publish" | "auto" | "manual"
+  linkedAt: timestamp("linked_at"),
+  learnings: text("learnings"), // what we learned — the whole point of the loop
+  learningsAt: timestamp("learnings_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => [
   index("adset_owners_video_editor_idx").on(table.videoEditorId),
   index("adset_owners_strategist_idx").on(table.creativeStrategistId),
+  index("adset_owners_assignment_idx").on(table.assignmentId),
 ]);
 
 // ─── Ad Bonus Ledger (lifetime, locked once) ────────────────────────────────

@@ -14,7 +14,8 @@ import {
 } from "@/components/ui/select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
-import { Plus, Trash2, CalendarIcon, Loader2, ChevronDown, Save, X } from "lucide-react";
+import { Plus, Trash2, CalendarIcon, Loader2, ChevronDown, Save, X, LayoutTemplate, BookmarkPlus, FlaskConical } from "lucide-react";
+import { AWARENESS_LEVELS } from "@/components/learning-loop/format";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -36,6 +37,7 @@ interface OptionItem {
 
 interface AllOptions {
   angles: OptionItem[];
+  problems: OptionItem[];
   products: OptionItem[];
   formats: OptionItem[];
   countries: OptionItem[];
@@ -78,7 +80,48 @@ interface FormState {
   description: string;
   briefContent: string;
   references: Array<{ id: string; kind: "url" | "library" | "file"; value: string; label?: string; note?: string }>;
+  // Learning Loop — the brief as a test
+  problemId: string;
+  hypothesis: string;
+  variableTested: string;
+  adType: string; // "" | "ideation" | "iteration"
+  iterationOfId: string;
+  awarenessLevel: string;
+  publishTemplateId: number | null;
 }
+
+/** A saved brief template — every recurring field of the form, so one pick fills it all. */
+interface BriefTemplate {
+  id: string;
+  name: string;
+  briefContent: string | null;
+  formatId: string | null;
+  angleId: string | null;
+  productId: string | null;
+  countryId: string | null;
+  offerTypeId: string | null;
+  scriptStructureId: string | null;
+  customerAvatarIds: string[] | null;
+  estimatedMinutes: number | null;
+  priority: string | null;
+  references: FormState["references"] | null;
+  scriptContent: ScriptContent | null;
+  problemId: string | null;
+  landingPage: string | null;
+  assignedToId: string | null;
+  creativeStrategistId: string | null;
+  creativeStrategistName: string | null;
+  description: string | null;
+  hypothesis: string | null;
+  variableTested: string | null;
+  adType: string | null;
+  awarenessLevel: string | null;
+  publishTemplateId: number | null;
+  useCount: number;
+}
+
+interface PublishTemplate { id: number; name: string; productName?: string | null }
+interface AssignmentLite { id: string; batchNumber: number; autoName: string | null; title: string; status: string }
 
 const PRIORITIES: { value: AssignmentPriority; label: string; color: string }[] = [
   { value: "URGENT", label: "Urgent", color: "bg-red-500/20 text-red-400 border-red-500/30" },
@@ -138,7 +181,27 @@ const emptyForm: FormState = {
   description: "",
   briefContent: "",
   references: [],
+  problemId: "",
+  hypothesis: "",
+  variableTested: "",
+  adType: "",
+  iterationOfId: "",
+  awarenessLevel: "",
+  publishTemplateId: null,
 };
+
+/** Learning Loop fields read from a saved assignment (all optional on older rows). */
+function loopFields(a: EditorAssignment): Pick<FormState, "problemId" | "hypothesis" | "variableTested" | "adType" | "iterationOfId" | "awarenessLevel" | "publishTemplateId"> {
+  return {
+    problemId: a.problemId || "",
+    hypothesis: a.hypothesis || "",
+    variableTested: a.variableTested || "",
+    adType: a.adType || "",
+    iterationOfId: a.iterationOfId || "",
+    awarenessLevel: a.awarenessLevel || "",
+    publishTemplateId: typeof a.publishTemplateId === "number" ? a.publishTemplateId : null,
+  };
+}
 
 const emptyScript: ScriptContent = {
   hooks: [{ id: "h1", label: "H1", eng: "", se: "" }],
@@ -333,6 +396,13 @@ export function AssignmentModal({ open, onOpenChange, assignment, onSaved }: Ass
     payload.briefContent = f.briefContent || null;
     payload.references = f.references;
     payload.scriptContent = hasScriptContent ? s : null;
+    payload.problemId = f.problemId || null;
+    payload.hypothesis = f.hypothesis || null;
+    payload.variableTested = f.variableTested || null;
+    payload.adType = f.adType || null;
+    payload.iterationOfId = f.adType === "iteration" ? f.iterationOfId || null : null;
+    payload.awarenessLevel = f.awarenessLevel || null;
+    payload.publishTemplateId = f.publishTemplateId;
 
     try {
       await fetch(`/api/assignments/${assignment.id}`, {
@@ -373,17 +443,140 @@ export function AssignmentModal({ open, onOpenChange, assignment, onSaved }: Ass
     scheduleDraftSave();
   }, [scheduleDraftSave]);
 
-  // ─── Fetch options + users ───
+  // ─── Fetch options + users (+ templates for the template bar) ───
   const fetchOptions = () => fetch("/api/options").then((r) => r.json());
+
+  const [briefTemplates, setBriefTemplates] = useState<BriefTemplate[]>([]);
+  const [publishTemplates, setPublishTemplates] = useState<PublishTemplate[]>([]);
+  const [allAssignments, setAllAssignments] = useState<AssignmentLite[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  const [templatePopoverOpen, setTemplatePopoverOpen] = useState(false);
+  const [templateName, setTemplateName] = useState("");
+  const [savingTemplate, setSavingTemplate] = useState(false);
+
+  const fetchBriefTemplates = useCallback(async () => {
+    try {
+      const res = await fetch("/api/brief-templates");
+      if (res.ok) setBriefTemplates(((await res.json()).templates ?? []) as BriefTemplate[]);
+    } catch { /* template bar just stays empty */ }
+  }, []);
 
   useEffect(() => {
     if (!open) return;
     setOptionsLoading(true);
+    setSelectedTemplateId("");
     Promise.all([fetchOptions(), fetch("/api/users").then((r) => r.json())])
       .then(([opts, usersData]) => { setOptions(opts); setUsers(usersData.users || []); })
       .catch(console.error)
       .finally(() => setOptionsLoading(false));
-  }, [open]);
+    fetchBriefTemplates();
+    fetch("/api/templates").then((r) => r.json()).then((d) => setPublishTemplates((d.data ?? []) as PublishTemplate[])).catch(() => {});
+    fetch("/api/assignments").then((r) => r.json()).then((d) => setAllAssignments(Array.isArray(d) ? d.filter((a: AssignmentLite) => a.status !== "DRAFT") : [])).catch(() => {});
+  }, [open, fetchBriefTemplates]);
+
+  // ─── Template bar: apply / save / delete ───
+  const templateFromForm = (name: string) => {
+    const f = formRef.current;
+    const s = scriptRef.current;
+    const hasScript = s.hooks.some((h) => h.eng || h.se) || s.body.eng || s.body.se;
+    return {
+      name,
+      briefContent: f.briefContent || null,
+      formatId: f.formatId || null,
+      angleId: f.angleId || null,
+      productId: f.productId || null,
+      countryId: f.countryId || null,
+      offerTypeId: f.offerTypeId || null,
+      scriptStructureId: f.scriptStructureId || null,
+      customerAvatarIds: f.customerAvatarIds,
+      priority: f.priority.toLowerCase(),
+      references: f.references,
+      scriptContent: hasScript ? s : null,
+      problemId: f.problemId || null,
+      landingPage: f.landingPage || null,
+      assignedToId: f.assignedToId || null,
+      creativeStrategistId: f.creativeStrategistId || null,
+      creativeStrategistName: f.creativeStrategistName || null,
+      description: f.description || null,
+      hypothesis: f.hypothesis || null,
+      variableTested: f.variableTested || null,
+      adType: f.adType || null,
+      awarenessLevel: f.awarenessLevel || null,
+      publishTemplateId: f.publishTemplateId,
+    };
+  };
+
+  const applyTemplate = (t: BriefTemplate) => {
+    // Everything except batch number, version and due date — those are per brief.
+    updateForm({
+      formatId: t.formatId ?? "",
+      angleId: t.angleId ?? "",
+      productId: t.productId ?? "",
+      countryId: t.countryId ?? "",
+      offerTypeId: t.offerTypeId ?? "",
+      scriptStructureId: t.scriptStructureId ?? "",
+      customerAvatarIds: t.customerAvatarIds ?? [],
+      landingPage: t.landingPage ?? "",
+      assignedToId: t.assignedToId ?? formRef.current.assignedToId,
+      creativeStrategistId: t.creativeStrategistId ?? "",
+      creativeStrategistName: t.creativeStrategistName ?? "",
+      priority: ((t.priority ?? "medium").toUpperCase() as AssignmentPriority),
+      description: t.description ?? "",
+      briefContent: t.briefContent ?? "",
+      references: (t.references ?? []).map((r) => ({ ...r, id: crypto.randomUUID() })),
+      problemId: t.problemId ?? "",
+      hypothesis: t.hypothesis ?? "",
+      variableTested: t.variableTested ?? "",
+      adType: t.adType ?? "",
+      awarenessLevel: t.awarenessLevel ?? "",
+      publishTemplateId: t.publishTemplateId ?? null,
+    });
+    if (t.scriptContent) setScript(t.scriptContent);
+    if (t.customerAvatarIds?.length) setShowAvatars(true);
+    setSelectedTemplateId(t.id);
+    void fetch(`/api/brief-templates/${t.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ used: true }) });
+    toast.success(`Mall "${t.name}" ifylld`, { description: "Fyll i batch och datum, justera vid behov." });
+  };
+
+  const saveTemplate = async (existingId?: string) => {
+    const name = (existingId ? briefTemplates.find((t) => t.id === existingId)?.name : templateName)?.trim();
+    if (!name) return;
+    setSavingTemplate(true);
+    try {
+      const res = await fetch(existingId ? `/api/brief-templates/${existingId}` : "/api/brief-templates", {
+        method: existingId ? "PATCH" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(templateFromForm(name)),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Kunde inte spara mallen");
+      const saved = await res.json();
+      await fetchBriefTemplates();
+      setSelectedTemplateId(saved.id ?? existingId ?? "");
+      setTemplateName("");
+      setTemplatePopoverOpen(false);
+      toast.success(existingId ? `Mallen "${name}" uppdaterad` : `Mall "${name}" sparad`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Kunde inte spara mallen");
+    } finally {
+      setSavingTemplate(false);
+    }
+  };
+
+  const deleteTemplate = async (id: string) => {
+    const t = briefTemplates.find((x) => x.id === id);
+    if (!t || !window.confirm(`Ta bort mallen "${t.name}"?`)) return;
+    try {
+      const res = await fetch(`/api/brief-templates/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Kunde inte ta bort");
+      setSelectedTemplateId("");
+      await fetchBriefTemplates();
+      toast.success("Mall borttagen");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Kunde inte ta bort");
+    }
+  };
+
+  const selectedTemplate = briefTemplates.find((t) => t.id === selectedTemplateId) ?? null;
 
   // ─── Initialize form state ───
   useEffect(() => {
@@ -427,6 +620,7 @@ export function AssignmentModal({ open, onOpenChange, assignment, onSaved }: Ass
             description: assignment.description || "",
             briefContent,
             references,
+            ...loopFields(assignment),
           });
           setScript(assignment.scriptContent || { ...emptyScript, hooks: [{ id: "h1", label: "H1", eng: "", se: "" }] });
           if (assignment.customerAvatars?.length) setShowAvatars(true);
@@ -456,6 +650,7 @@ export function AssignmentModal({ open, onOpenChange, assignment, onSaved }: Ass
         description: assignment.description || "",
         briefContent: (assignment as { briefContent?: string | null }).briefContent || "",
         references: (assignment as { references?: FormState["references"] }).references || [],
+        ...loopFields(assignment),
       });
       if (assignment.scriptContent) {
         setScript(assignment.scriptContent);
@@ -571,6 +766,13 @@ export function AssignmentModal({ open, onOpenChange, assignment, onSaved }: Ass
       briefContent: form.briefContent || undefined,
       references: form.references,
       scriptContent: hasScriptContent ? script : undefined,
+      problemId: form.problemId || undefined,
+      hypothesis: form.hypothesis || undefined,
+      variableTested: form.variableTested || undefined,
+      adType: form.adType || undefined,
+      iterationOfId: form.adType === "iteration" ? form.iterationOfId || undefined : undefined,
+      awarenessLevel: form.awarenessLevel || undefined,
+      publishTemplateId: form.publishTemplateId ?? undefined,
     };
 
     try {
@@ -680,6 +882,65 @@ export function AssignmentModal({ open, onOpenChange, assignment, onSaved }: Ass
             <div className="flex-1 overflow-y-auto overscroll-contain">
               <div className="px-8 py-6 space-y-8">
 
+                {/* ─── Template bar: one pick fills the whole form ─── */}
+                <div className="flex flex-wrap items-center gap-3 rounded-xl border border-cyan-500/15 bg-cyan-500/[0.04] px-4 py-3">
+                  <LayoutTemplate className="h-4 w-4 text-cyan-400 shrink-0" />
+                  <span className="text-xs font-semibold uppercase tracking-wider text-cyan-300/80">Mall</span>
+                  <Select
+                    value={selectedTemplateId || "___none___"}
+                    onValueChange={(v) => {
+                      if (v === "___none___") { setSelectedTemplateId(""); return; }
+                      const t = briefTemplates.find((x) => x.id === v);
+                      if (t) applyTemplate(t);
+                    }}
+                  >
+                    <SelectTrigger className="h-9 w-[320px] max-w-full bg-white/[0.03] border-white/[0.06] text-sm">
+                      <span className={selectedTemplate ? "text-white" : "text-slate-500"}>
+                        {selectedTemplate?.name ?? (briefTemplates.length ? "Välj mall — fyller i allt utom batch & datum" : "Inga mallar än — spara den här briefen som mall")}
+                      </span>
+                    </SelectTrigger>
+                    <SelectContent className="bg-[#111827] border-white/10">
+                      <SelectItem value="___none___" className="text-slate-500">— Ingen mall —</SelectItem>
+                      {briefTemplates.map((t) => (
+                        <SelectItem key={t.id} value={t.id}>
+                          {t.name}{t.useCount > 0 ? ` · ${t.useCount}×` : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {selectedTemplate && (
+                    <button type="button" onClick={() => deleteTemplate(selectedTemplate.id)} title="Ta bort mall"
+                      className="h-8 w-8 rounded-md flex items-center justify-center text-slate-600 hover:text-red-400 hover:bg-red-500/10 transition-colors">
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                  <div className="ml-auto">
+                    <Popover open={templatePopoverOpen} onOpenChange={setTemplatePopoverOpen}>
+                      <PopoverTrigger className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-3 text-xs text-slate-300 hover:bg-white/[0.06] transition-colors">
+                        <BookmarkPlus className="h-3.5 w-3.5" /> Spara som mall
+                      </PopoverTrigger>
+                      <PopoverContent className="w-80 bg-[#111827] border-white/10 p-3 space-y-2" align="end">
+                        <p className="text-xs text-slate-400">
+                          Sparar produkt, landing, format, angle, problem, editor, strateg, hypotes, brief, referenser och script. Batch, version och datum sparas inte.
+                        </p>
+                        <Input value={templateName} onChange={(e) => setTemplateName(e.target.value)} placeholder='t.ex. "Probiotika LP12 + PP"' autoFocus
+                          className="h-8 text-xs bg-white/5 border-white/10"
+                          onKeyDown={(e) => e.key === "Enter" && saveTemplate()} />
+                        <Button type="button" size="sm" className="w-full h-8 text-xs bg-cyan-600 hover:bg-cyan-500 text-white"
+                          onClick={() => saveTemplate()} disabled={savingTemplate || !templateName.trim()}>
+                          {savingTemplate ? <Loader2 className="h-3 w-3 animate-spin" /> : "Spara ny mall"}
+                        </Button>
+                        {selectedTemplate && (
+                          <Button type="button" size="sm" variant="outline" className="w-full h-8 text-xs bg-white/[0.03] border-white/10 text-slate-300"
+                            onClick={() => saveTemplate(selectedTemplate.id)} disabled={savingTemplate}>
+                            Uppdatera &quot;{selectedTemplate.name}&quot; med det som står nu
+                          </Button>
+                        )}
+                      </PopoverContent>
+                    </Popover>
+                  </div>
+                </div>
+
                 {/* ─── Top Row: Key Fields ─── */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-4">
                   {/* Batch */}
@@ -762,6 +1023,92 @@ export function AssignmentModal({ open, onOpenChange, assignment, onSaved }: Ass
                         <OptionSelect value={form.scriptStructureId} onChange={(v) => updateForm({ scriptStructureId: v })}
                           items={options?.scriptStructures || []} placeholder="Select structure..."
                           label="Script Structure" apiType="script-structures" onOptionsRefresh={refreshOptions} />
+                      </div>
+                    </div>
+
+                    {/* ─── Learning Loop: the brief as a test ─── */}
+                    <div className="rounded-xl border border-violet-500/15 bg-violet-500/[0.03] p-5 space-y-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <h3 className="text-xs font-semibold text-violet-300/90 uppercase tracking-wider flex items-center gap-2">
+                          <FlaskConical className="h-3.5 w-3.5" /> Learning Loop · testet
+                        </h3>
+                        <div className="flex items-center gap-1 rounded-lg border border-white/[0.06] p-0.5">
+                          {[{ v: "ideation", l: "💡 Ideation" }, { v: "iteration", l: "🔄 Iteration" }].map((o) => (
+                            <button key={o.v} type="button"
+                              onClick={() => updateForm({ adType: form.adType === o.v ? "" : o.v })}
+                              className={cn("rounded-md px-2.5 py-1 text-xs transition-colors",
+                                form.adType === o.v ? "bg-violet-500/20 text-violet-200" : "text-slate-500 hover:text-slate-300")}>
+                              {o.l}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                        <div className="lg:col-span-2 space-y-1.5">
+                          <Label className="text-xs font-medium text-slate-500 uppercase tracking-wider">Hypotes — varför gör vi den här annonsen?</Label>
+                          <Textarea value={form.hypothesis} onChange={(e) => updateForm({ hypothesis: e.target.value })} rows={3}
+                            placeholder={"WHY: vad i datan/marknaden säger att det här kan funka?\nWHAT: vad handlar annonsen om?\nHOW: hur gör vi den? Vad förväntar vi oss (ROAS/CPA)?"}
+                            className="bg-white/[0.03] border-white/[0.06] text-sm resize-none" />
+                        </div>
+                        <div className="space-y-4">
+                          <div className="space-y-1.5">
+                            <Label className="text-xs font-medium text-slate-500 uppercase tracking-wider">Variabel som testas</Label>
+                            <Input value={form.variableTested} onChange={(e) => updateForm({ variableTested: e.target.value })}
+                              placeholder="det ENDA vi ändrar: hook, LP, format…" className="h-10 bg-white/[0.03] border-white/[0.06] text-sm" />
+                          </div>
+                          <div className="space-y-1.5">
+                            <Label className="text-xs font-medium text-slate-500 uppercase tracking-wider">Awareness</Label>
+                            <Select value={form.awarenessLevel || "___none___"} onValueChange={(v) => updateForm({ awarenessLevel: v === "___none___" ? "" : v })}>
+                              <SelectTrigger className="bg-white/[0.03] border-white/[0.06] text-sm h-10">
+                                <span className={form.awarenessLevel ? "text-white" : "text-slate-600"}>
+                                  {AWARENESS_LEVELS.find((l) => l.value === form.awarenessLevel)?.label ?? "Välj nivå..."}
+                                </span>
+                              </SelectTrigger>
+                              <SelectContent className="bg-[#111827] border-white/10">
+                                <SelectItem value="___none___" className="text-slate-600">— None —</SelectItem>
+                                {AWARENESS_LEVELS.map((l) => <SelectItem key={l.value} value={l.value}>{l.label}</SelectItem>)}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+                        <OptionSelect value={form.problemId} onChange={(v) => updateForm({ problemId: v })}
+                          items={options?.problems || []} placeholder="Select problem..."
+                          label="Problem" apiType="problems" onOptionsRefresh={refreshOptions} />
+                        {form.adType === "iteration" && (
+                          <div className="space-y-1.5">
+                            <Label className="text-xs font-medium text-slate-500 uppercase tracking-wider">Iteration av</Label>
+                            <Select value={form.iterationOfId || "___none___"} onValueChange={(v) => updateForm({ iterationOfId: v === "___none___" ? "" : v })}>
+                              <SelectTrigger className="bg-white/[0.03] border-white/[0.06] text-sm h-10">
+                                <span className={form.iterationOfId ? "text-white" : "text-slate-600"}>
+                                  {(() => { const a = allAssignments.find((x) => x.id === form.iterationOfId); return a ? `#${a.batchNumber} ${a.autoName || a.title}` : "Välj ursprunglig brief..."; })()}
+                                </span>
+                              </SelectTrigger>
+                              <SelectContent className="bg-[#111827] border-white/10">
+                                <SelectItem value="___none___" className="text-slate-600">— None —</SelectItem>
+                                {allAssignments.filter((a) => a.id !== assignment?.id).sort((a, b) => b.batchNumber - a.batchNumber).slice(0, 200).map((a) => (
+                                  <SelectItem key={a.id} value={a.id}>#{a.batchNumber} {a.autoName || a.title}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        )}
+                        <div className="space-y-1.5">
+                          <Label className="text-xs font-medium text-slate-500 uppercase tracking-wider">Publiceringsmall</Label>
+                          <Select value={form.publishTemplateId != null ? String(form.publishTemplateId) : "___none___"}
+                            onValueChange={(v) => updateForm({ publishTemplateId: v === "___none___" ? null : Number(v) })}>
+                            <SelectTrigger className="bg-white/[0.03] border-white/[0.06] text-sm h-10">
+                              <span className={form.publishTemplateId != null ? "text-white" : "text-slate-600"}>
+                                {publishTemplates.find((t) => t.id === form.publishTemplateId)?.name ?? "Copy + landing pages vid publicering..."}
+                              </span>
+                            </SelectTrigger>
+                            <SelectContent className="bg-[#111827] border-white/10">
+                              <SelectItem value="___none___" className="text-slate-600">— None —</SelectItem>
+                              {publishTemplates.map((t) => <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>)}
+                            </SelectContent>
+                          </Select>
+                        </div>
                       </div>
                     </div>
 

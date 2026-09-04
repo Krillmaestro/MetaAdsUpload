@@ -36,6 +36,7 @@ import {
   Rocket,
   Hourglass,
   MousePointerClick,
+  Repeat,
 } from "lucide-react";
 import { signOut } from "next-auth/react";
 
@@ -108,6 +109,7 @@ const navSections: NavSection[] = [
     label: "STRATEGY",
     requiredRole: "admin",
     items: [
+      { href: "/learning-loop", label: "Learning Loop", icon: Repeat },
       { href: "/strategy/avatars", label: "Avatar Library", icon: Users2 },
       { href: "/strategy/roadmap", label: "Creative Roadmap", icon: Route },
       { href: "/strategy/hit-rate", label: "Hit Rate", icon: TrendingUp },

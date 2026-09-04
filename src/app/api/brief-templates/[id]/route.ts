@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db, schema } from "@/db";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { guardAdmin } from "@/lib/auth-helpers";
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -10,8 +10,19 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   try {
     const body = await request.json();
     const updates: Record<string, unknown> = { updatedAt: new Date() };
-    for (const key of ["name", "briefContent", "formatId", "angleId", "productId", "countryId", "offerTypeId", "scriptStructureId", "customerAvatarIds", "estimatedMinutes", "priority", "references", "scriptContent"] as const) {
+    for (const key of [
+      "name", "briefContent", "formatId", "angleId", "productId", "countryId", "offerTypeId", "scriptStructureId",
+      "customerAvatarIds", "estimatedMinutes", "priority", "references", "scriptContent",
+      "problemId", "landingPage", "assignedToId", "creativeStrategistId", "creativeStrategistName", "description",
+      "hypothesis", "variableTested", "adType", "awarenessLevel", "publishTemplateId",
+    ] as const) {
       if (body[key] !== undefined) updates[key] = body[key];
+    }
+    // { used: true } = the template was applied to a brief — bump usage so the
+    // picker can sort the most-used ones first.
+    if (body.used === true) {
+      updates.useCount = sql`${schema.briefTemplates.useCount} + 1`;
+      updates.lastUsedAt = new Date();
     }
     const [updated] = await db.update(schema.briefTemplates).set(updates).where(eq(schema.briefTemplates.id, id)).returning();
     if (!updated) return NextResponse.json({ error: "Not found" }, { status: 404 });

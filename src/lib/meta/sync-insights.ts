@@ -14,8 +14,41 @@ import {
   type InsightData,
 } from "./insights";
 import { getCampaigns } from "./campaigns";
+import { getAdSets } from "./adsets";
 import { getAds } from "./ads";
-import { metaApi, resolveAccount, withAdAccount } from "./client";
+import { metaApi, resolveAccount, withAdAccount, getAdAccountId } from "./client";
+
+/**
+ * Ad set metadata → adsets_cache for the CURRENT account context (call inside
+ * withAdAccount). Names, status and created_time are what the Learning Loop
+ * needs to show an ad set that has not spent yet and to count "days live".
+ */
+export async function syncAdsetsCache(): Promise<number> {
+  const adAccountId = await getAdAccountId();
+  const adsets = await getAdSets(undefined, 500);
+  for (const s of adsets) {
+    const values = {
+      adAccountId,
+      campaignId: s.campaign_id,
+      name: s.name,
+      status: s.status,
+      effectiveStatus: s.effective_status ?? null,
+      dailyBudget: s.daily_budget ? parseFloat(s.daily_budget) / 100 : null,
+      lifetimeBudget: s.lifetime_budget ? parseFloat(s.lifetime_budget) / 100 : null,
+      optimizationGoal: s.optimization_goal ?? null,
+      billingEvent: s.billing_event ?? null,
+      bidStrategy: s.bid_strategy ?? null,
+      startTime: s.start_time ? new Date(s.start_time) : null,
+      endTime: s.end_time ? new Date(s.end_time) : null,
+      createdTime: s.created_time ? new Date(s.created_time) : null,
+      syncedAt: new Date(),
+    };
+    await db.insert(schema.adsetsCache)
+      .values({ id: s.id, targeting: (s.targeting ?? {}) as Record<string, unknown>, ...values })
+      .onConflictDoUpdate({ target: schema.adsetsCache.id, set: values });
+  }
+  return adsets.length;
+}
 
 function extractLinkClicks(actions?: Array<{ action_type: string; value: string }>): number {
   return parseInt(actions?.find((a) => a.action_type === "link_click")?.value || "0", 10);
@@ -363,6 +396,15 @@ async function syncOneAccount(adAccountId: string, isPrimary: boolean) {
     });
   }
 
+  // 1b. Ad set metadata → adsets_cache (names / status / created_time for the
+  // Learning Loop). Best-effort: a failure here must not stop the insights.
+  let adsetCount = 0;
+  try {
+    adsetCount = await syncAdsetsCache();
+  } catch (e) {
+    console.error(`adsets_cache sync failed for ${adAccountId}:`, e instanceof Error ? e.message : e);
+  }
+
   // 2. Ad metadata → ads_cache (for ad names on the editor dashboard)
   const ads = await getAds();
   for (const ad of ads) {
@@ -427,6 +469,7 @@ async function syncOneAccount(adAccountId: string, isPrimary: boolean) {
 
   return {
     campaigns: campaigns.length,
+    adsets: adsetCount,
     ads: ads.length,
     campaignInsightRows: campaignRows.length,
     adInsightRows: adRowCount,

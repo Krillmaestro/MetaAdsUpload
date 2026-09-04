@@ -7,6 +7,7 @@ import { createAdSet } from "@/lib/meta/adsets";
 import { createAd, getAdPostId } from "@/lib/meta/ads";
 import { createAdCreative, uploadImage, uploadVideo, waitForVideoReady, getVideoThumbnail } from "@/lib/meta/creatives";
 import { metaApi, getAdAccountId } from "@/lib/meta/client";
+import { applyLinks } from "@/lib/learning-loop/link";
 
 export const maxDuration = 300; // large videos: Meta-side download + processing wait
 
@@ -325,6 +326,23 @@ export async function POST(
       })
       .where(eq(schema.assignments.id, id))
       .returning();
+
+    // --- Step 6: Learning Loop link — the new ad set IS this brief, live.
+    // Cache the ad set first so the row has a name before the nightly sync.
+    try {
+      await db.insert(schema.adsetsCache).values({
+        id: adset.id,
+        adAccountId: await getAdAccountId(),
+        campaignId: campaignId as string,
+        name: adsetName,
+        status: "PAUSED",
+        effectiveStatus: "PAUSED",
+        createdTime: new Date(),
+      }).onConflictDoNothing();
+      await applyLinks([{ assignmentId: id, adsetId: adset.id }], "publish", session.user.id);
+    } catch (e) {
+      console.error("Learning Loop link after publish failed:", e);
+    }
 
     return NextResponse.json({
       success: true,

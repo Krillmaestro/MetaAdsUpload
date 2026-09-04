@@ -9,7 +9,7 @@ import { guardAdmin } from "@/lib/auth-helpers";
 export async function GET() {
   const { error } = await guardAdmin();
   if (error) return error;
-  const templates = await db.select().from(schema.briefTemplates).orderBy(desc(schema.briefTemplates.updatedAt));
+  const templates = await db.select().from(schema.briefTemplates).orderBy(desc(schema.briefTemplates.lastUsedAt), desc(schema.briefTemplates.updatedAt));
   return NextResponse.json({ templates });
 }
 
@@ -33,6 +33,17 @@ export async function POST(request: NextRequest) {
       priority: body.priority ?? "medium",
       references: body.references ?? [],
       scriptContent: body.scriptContent ?? null,
+      problemId: body.problemId ?? null,
+      landingPage: body.landingPage ?? null,
+      assignedToId: body.assignedToId ?? null,
+      creativeStrategistId: body.creativeStrategistId ?? null,
+      creativeStrategistName: body.creativeStrategistName ?? null,
+      description: body.description ?? null,
+      hypothesis: body.hypothesis ?? null,
+      variableTested: body.variableTested ?? null,
+      adType: body.adType ?? null,
+      awarenessLevel: body.awarenessLevel ?? null,
+      publishTemplateId: typeof body.publishTemplateId === "number" ? body.publishTemplateId : null,
     }).returning();
     return NextResponse.json(created, { status: 201 });
   } catch (e) {

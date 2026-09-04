@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import {
   DropdownMenu,
@@ -95,6 +94,18 @@ export interface EditorAssignment {
   metaAdId: string | null;
   metaAdsetId: string | null;
   metaCampaignId: string | null;
+  // Learning Loop
+  problemId?: string | null;
+  problem?: { id: string; name: string } | null;
+  hypothesis?: string | null;
+  variableTested?: string | null;
+  adType?: string | null;
+  iterationOfId?: string | null;
+  awarenessLevel?: string | null;
+  publishTemplateId?: number | null;
+  linkedAdsets?: number;
+  briefContent?: string | null;
+  references?: Array<{ id: string; kind: "url" | "library" | "file"; value: string; label?: string; note?: string }>;
   totalTrackedSeconds: number;
   createdAt: string;
   updatedAt: string;
@@ -187,13 +198,6 @@ function isOverdue(dueDate: string | null): boolean {
   return new Date(dueDate) < new Date();
 }
 
-function getFormatIcon(formatName: string | undefined) {
-  if (!formatName) return Video;
-  const name = formatName.toUpperCase();
-  if (name.includes("STATIC")) return Image;
-  return Video;
-}
-
 interface AssignmentCardProps {
   assignment: EditorAssignment;
   onClick: () => void;
@@ -204,7 +208,7 @@ interface AssignmentCardProps {
 export function AssignmentCard({ assignment, onClick, onStatusChange, onPublish }: AssignmentCardProps) {
   const router = useRouter();
   const priority = PRIORITY_CONFIG[assignment.priority];
-  const FormatIcon = getFormatIcon(assignment.format?.name);
+  const isStatic = (assignment.format?.name ?? "").toUpperCase().includes("STATIC");
   const overdue =
     isOverdue(assignment.dueDate) &&
     !["POSTED", "READY_FOR_POSTING"].includes(assignment.status);
@@ -277,7 +281,7 @@ export function AssignmentCard({ assignment, onClick, onStatusChange, onPublish 
       <div className="flex items-center gap-2 mb-2 text-xs">
         {assignment.format && (
           <span className="flex items-center gap-1 text-slate-500">
-            <FormatIcon className="h-3 w-3" />
+            {isStatic ? <Image className="h-3 w-3" /> : <Video className="h-3 w-3" />}
             {assignment.format.name}
           </span>
         )}
@@ -324,6 +328,16 @@ export function AssignmentCard({ assignment, onClick, onStatusChange, onPublish 
           {priority.label}
         </Badge>
       </div>
+
+      {/* Learning Loop link state — only meaningful once the video is out */}
+      {assignment.status === "POSTED" && (
+        <div className={cn("mt-1.5 flex items-center gap-1 text-xs", (assignment.linkedAdsets ?? 0) > 0 ? "text-cyan-400/80" : "text-amber-400/80")}>
+          <Target className="h-3 w-3" />
+          {(assignment.linkedAdsets ?? 0) > 0
+            ? `${assignment.linkedAdsets} ad set kopplade`
+            : "Inget ad set kopplat"}
+        </div>
+      )}
 
       {/* Tracked Time */}
       {assignment.totalTrackedSeconds > 0 && (

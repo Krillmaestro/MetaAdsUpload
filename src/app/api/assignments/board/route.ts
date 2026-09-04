@@ -69,15 +69,22 @@ export async function GET(request: NextRequest) {
     }
 
     // Look up related entities
-    const [allUsers, allAngles, allFormats, allProducts, allCountries, allOfferTypes] = await Promise.all([
+    const [allUsers, allAngles, allFormats, allProducts, allCountries, allOfferTypes, allProblems, linkRows] = await Promise.all([
       db.select({ id: schema.users.id, name: schema.users.name, email: schema.users.email }).from(schema.users),
       db.select({ id: schema.angles.id, name: schema.angles.name }).from(schema.angles),
       db.select({ id: schema.formats.id, name: schema.formats.name }).from(schema.formats),
       db.select({ id: schema.products.id, name: schema.products.name, code: schema.products.code }).from(schema.products),
       db.select({ id: schema.countries.id, name: schema.countries.name, code: schema.countries.code }).from(schema.countries),
       db.select({ id: schema.offerTypes.id, name: schema.offerTypes.name }).from(schema.offerTypes),
+      db.select({ id: schema.problems.id, name: schema.problems.name }).from(schema.problems),
+      db.select({ assignmentId: schema.adsetOwners.assignmentId, n: sql<number>`count(*)` })
+        .from(schema.adsetOwners)
+        .where(sql`${schema.adsetOwners.assignmentId} is not null`)
+        .groupBy(schema.adsetOwners.assignmentId),
     ]);
 
+    const problemMap = new Map(allProblems.map(p => [p.id, p]));
+    const linkedAdsets = new Map(linkRows.map(r => [r.assignmentId as string, Number(r.n) || 0]));
     const userMap = new Map(allUsers.map(u => [u.id, u]));
     const angleMap = new Map(allAngles.map(a => [a.id, a]));
     const formatMap = new Map(allFormats.map(f => [f.id, f]));
@@ -106,6 +113,8 @@ export async function GET(request: NextRequest) {
         product: a.productId ? productMap.get(a.productId) || null : null,
         country: a.countryId ? countryMap.get(a.countryId) || null : null,
         offerType: a.offerTypeId ? offerTypeMap.get(a.offerTypeId) || null : null,
+        problem: a.problemId ? problemMap.get(a.problemId) || null : null,
+        linkedAdsets: linkedAdsets.get(a.id) ?? (a.metaAdsetId ? 1 : 0),
       };
       if (upperStatus in board) {
         board[upperStatus].push(enriched);

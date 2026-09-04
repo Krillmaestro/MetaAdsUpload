@@ -37,9 +37,11 @@ export interface AdSet {
   bid_strategy?: string;
   start_time?: string;
   end_time?: string;
+  created_time?: string;
+  effective_status?: string;
 }
 
-const ADSET_FIELDS = "id,campaign_id,name,status,daily_budget,lifetime_budget,targeting,optimization_goal,billing_event,bid_strategy,start_time,end_time";
+const ADSET_FIELDS = "id,campaign_id,name,status,effective_status,daily_budget,lifetime_budget,targeting,optimization_goal,billing_event,bid_strategy,start_time,end_time,created_time";
 
 // ─── Attribution ─────────────────────────────────────────────────────────────
 // Standard attribution window for this account's strategy:

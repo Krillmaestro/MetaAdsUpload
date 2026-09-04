@@ -41,7 +41,7 @@ export async function GET(
       .reduce((sum, te) => sum + (te.durationSeconds || 0), 0);
 
     // Look up related names
-    const [assignedTo, assignedBy, cs, angle, format, product, country, offerType, scriptStructure] = await Promise.all([
+    const [assignedTo, assignedBy, cs, angle, format, product, country, offerType, scriptStructure, problem] = await Promise.all([
       db.select({ id: schema.users.id, name: schema.users.name, email: schema.users.email }).from(schema.users).where(eq(schema.users.id, assignment.assignedToId)).then(r => r[0]),
       db.select({ id: schema.users.id, name: schema.users.name, email: schema.users.email }).from(schema.users).where(eq(schema.users.id, assignment.assignedById)).then(r => r[0]),
       assignment.creativeStrategistId
@@ -53,6 +53,7 @@ export async function GET(
       assignment.countryId ? db.select().from(schema.countries).where(eq(schema.countries.id, assignment.countryId)).then(r => r[0]) : null,
       assignment.offerTypeId ? db.select().from(schema.offerTypes).where(eq(schema.offerTypes.id, assignment.offerTypeId)).then(r => r[0]) : null,
       assignment.scriptStructureId ? db.select({ id: schema.scriptStructures.id, name: schema.scriptStructures.name }).from(schema.scriptStructures).where(eq(schema.scriptStructures.id, assignment.scriptStructureId)).then(r => r[0]) : null,
+      assignment.problemId ? db.select({ id: schema.problems.id, name: schema.problems.name }).from(schema.problems).where(eq(schema.problems.id, assignment.problemId)).then(r => r[0]) : null,
     ]);
 
     return NextResponse.json({
@@ -70,6 +71,7 @@ export async function GET(
       country,
       offerType,
       scriptStructure,
+      problem,
     });
   } catch (error) {
     console.error("Assignment GET error:", error);
@@ -119,6 +121,7 @@ export async function PUT(
       creativeStrategistId, creativeStrategistName, priority, dueDate, estimatedMinutes,
       videoLengthSeconds, description, scriptContent, revisionFeedback,
       strategistNotes, briefContent, references,
+      problemId, hypothesis, variableTested, adType, iterationOfId, awarenessLevel, publishTemplateId,
     } = body;
 
     // H2: Input validation — normalize priority to lowercase for DB
@@ -171,6 +174,14 @@ export async function PUT(
     if (references !== undefined) updateData.references = Array.isArray(references) ? references : [];
     if (revisionFeedback !== undefined) updateData.revisionFeedback = revisionFeedback;
     if (strategistNotes !== undefined) updateData.strategistNotes = strategistNotes;
+    // Learning Loop fields
+    if (problemId !== undefined) updateData.problemId = problemId || null;
+    if (hypothesis !== undefined) updateData.hypothesis = hypothesis || null;
+    if (variableTested !== undefined) updateData.variableTested = variableTested || null;
+    if (adType !== undefined) updateData.adType = adType === "ideation" || adType === "iteration" ? adType : null;
+    if (iterationOfId !== undefined) updateData.iterationOfId = iterationOfId || null;
+    if (awarenessLevel !== undefined) updateData.awarenessLevel = awarenessLevel || null;
+    if (publishTemplateId !== undefined) updateData.publishTemplateId = typeof publishTemplateId === "number" ? publishTemplateId : null;
 
     // Regenerate auto-name
     const autoName = await generateAutoName({

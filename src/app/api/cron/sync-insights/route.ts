@@ -1,6 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { runEditorInsightsSync, runSync } from "@/lib/meta/sync-insights";
 import { autoAssignAllAccounts } from "@/lib/adsets/auto-assign";
+import { autoLinkAll } from "@/lib/learning-loop/link";
+
+/**
+ * Brief ↔ ad set linking for the Learning Loop. Applies only high-confidence,
+ * unambiguous name matches; the rest wait for a person on /learning-loop.
+ * Best-effort for the same reason as auto-assign.
+ */
+async function autoLinkSafely() {
+  try {
+    return await autoLinkAll(null);
+  } catch (e) {
+    console.error("auto-link during sync failed:", e);
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
 
 /**
  * Auto-assignment runs after the account sync, once new ad sets exist locally.
@@ -46,11 +61,13 @@ async function handle(request: NextRequest) {
       // executes. That starved auto-assign every night — new ad sets sat
       // without owners and the editor pages stopped picking up new videos.
       const autoAssign = await autoAssignSafely();
+      const autoLink = await autoLinkSafely();
       const accountSync = await runSync();
-      return NextResponse.json({ success: true, accountSync, autoAssign });
+      return NextResponse.json({ success: true, accountSync, autoAssign, autoLink });
     }
     if (mode === "all") {
       const autoAssign = await autoAssignSafely();
+      await autoLinkSafely();
       let accountSync: unknown = null;
       try {
         accountSync = await runSync();

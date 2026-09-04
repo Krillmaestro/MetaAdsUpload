@@ -47,8 +47,11 @@ import {
   Eye,
   Upload,
   Loader2,
+  FlaskConical,
 } from "lucide-react";
 import Link from "next/link";
+import { AssignmentPerformance } from "@/components/assignments/assignment-performance";
+import { AWARENESS_LEVELS } from "@/components/learning-loop/format";
 import { cn } from "@/lib/utils";
 import {
   STATUS_CONFIG,
@@ -362,6 +365,41 @@ export function AssignmentDetail({
                   )}
                 </CardContent>
               </Card>
+
+              {/* Learning Loop — the test this brief IS */}
+              {(assignment.hypothesis || assignment.variableTested || assignment.adType || assignment.awarenessLevel || assignment.problem) && (
+                <Card className="border-violet-500/20 bg-violet-500/5">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-medium text-violet-300 flex items-center gap-2">
+                      <FlaskConical className="h-4 w-4" />
+                      Learning Loop · hypotes
+                      {assignment.adType && (
+                        <span className="ml-auto rounded bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-normal text-violet-300">
+                          {assignment.adType === "iteration" ? "Iteration" : "Ideation"}
+                        </span>
+                      )}
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-2 text-sm">
+                    {assignment.hypothesis && <p className="whitespace-pre-wrap text-slate-200">{assignment.hypothesis}</p>}
+                    <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
+                      {assignment.variableTested && <span><span className="text-slate-500">Variabel:</span> {assignment.variableTested}</span>}
+                      {assignment.problem && <span><span className="text-slate-500">Problem:</span> {assignment.problem.name}</span>}
+                      {assignment.awarenessLevel && <span><span className="text-slate-500">Awareness:</span> {AWARENESS_LEVELS.find((l) => l.value === assignment.awarenessLevel)?.label ?? assignment.awarenessLevel}</span>}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Learning Loop — where it runs and how it does */}
+              {["READY_FOR_POSTING", "POSTED"].includes(assignment.status) && (
+                <AssignmentPerformance
+                  assignmentId={assignment.id}
+                  assignmentName={`#${assignment.batchNumber} ${assignment.autoName || assignment.title}`}
+                  isAdmin={isAdmin}
+                  isPosted={assignment.status === "POSTED"}
+                />
+              )}
 
               {/* Properties Grid */}
               <div className="grid grid-cols-2 gap-6">

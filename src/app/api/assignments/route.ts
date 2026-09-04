@@ -72,7 +72,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Look up related entity names for each assignment
-    const [allUsers, allAngles, allFormats, allProducts, allCountries, allOfferTypes, allScriptStructures] = await Promise.all([
+    const [allUsers, allAngles, allFormats, allProducts, allCountries, allOfferTypes, allScriptStructures, allProblems] = await Promise.all([
       db.select({ id: schema.users.id, name: schema.users.name, email: schema.users.email }).from(schema.users),
       db.select({ id: schema.angles.id, name: schema.angles.name }).from(schema.angles),
       db.select({ id: schema.formats.id, name: schema.formats.name }).from(schema.formats),
@@ -80,8 +80,10 @@ export async function GET(request: NextRequest) {
       db.select({ id: schema.countries.id, name: schema.countries.name, code: schema.countries.code }).from(schema.countries),
       db.select({ id: schema.offerTypes.id, name: schema.offerTypes.name }).from(schema.offerTypes),
       db.select({ id: schema.scriptStructures.id, name: schema.scriptStructures.name }).from(schema.scriptStructures),
+      db.select({ id: schema.problems.id, name: schema.problems.name }).from(schema.problems),
     ]);
 
+    const problemMap = new Map(allProblems.map(p => [p.id, p]));
     const userMap = new Map(allUsers.map(u => [u.id, u]));
     const angleMap = new Map(allAngles.map(a => [a.id, a]));
     const formatMap = new Map(allFormats.map(f => [f.id, f]));
@@ -104,6 +106,7 @@ export async function GET(request: NextRequest) {
       country: a.countryId ? countryMap.get(a.countryId) || null : null,
       offerType: a.offerTypeId ? offerTypeMap.get(a.offerTypeId) || null : null,
       scriptStructure: a.scriptStructureId ? scriptStructureMap.get(a.scriptStructureId) || null : null,
+      problem: a.problemId ? problemMap.get(a.problemId) || null : null,
     }));
 
     return NextResponse.json(enriched);
@@ -149,6 +152,13 @@ export async function POST(request: NextRequest) {
       scriptContent,
       briefContent,
       references,
+      problemId,
+      hypothesis,
+      variableTested,
+      adType,
+      iterationOfId,
+      awarenessLevel,
+      publishTemplateId,
     } = body;
 
     // ─── Draft creation: instant empty assignment ───
@@ -259,6 +269,13 @@ export async function POST(request: NextRequest) {
         scriptContent: scriptContent || null,
         briefContent: typeof briefContent === "string" ? briefContent : null,
         references: Array.isArray(references) ? references : [],
+        problemId: problemId || null,
+        hypothesis: typeof hypothesis === "string" ? hypothesis : null,
+        variableTested: typeof variableTested === "string" ? variableTested : null,
+        adType: adType === "ideation" || adType === "iteration" ? adType : null,
+        iterationOfId: iterationOfId || null,
+        awarenessLevel: typeof awarenessLevel === "string" && awarenessLevel ? awarenessLevel : null,
+        publishTemplateId: typeof publishTemplateId === "number" ? publishTemplateId : null,
         autoName,
         createdAt: now,
         updatedAt: now,
