@@ -136,7 +136,11 @@ export async function GET(request: NextRequest) {
           .from(schema.creatives)
           .where(or(videoIds.length ? inArray(schema.creatives.metaVideoId, videoIds) : sql`false`, hashes.length ? inArray(schema.creatives.metaImageHash, hashes) : sql`false`))
       : [];
-    const libVideo = new Map(lib.filter((l) => l.metaVideoId && l.r2Url).map((l) => [l.metaVideoId!, l]));
+    // The library has duplicate rows for the same master (re-uploads); when
+    // several rows share a video, the one with a transcoded preview wins.
+    const preferPreview = <T extends { previewUrl: string | null }>(a: T, b: T) => (b.previewUrl ? 1 : 0) - (a.previewUrl ? 1 : 0);
+    const libVideo = new Map<string, (typeof lib)[number]>();
+    for (const l of [...lib].sort(preferPreview)) if (l.metaVideoId && l.r2Url && !libVideo.has(l.metaVideoId)) libVideo.set(l.metaVideoId, l);
     const libImage = new Map(lib.filter((l) => l.metaImageHash && l.r2Url).map((l) => [l.metaImageHash!, l]));
 
     // Second chance for videos: most batches were launched by script, so the
@@ -152,7 +156,7 @@ export async function GET(request: NextRequest) {
           .from(schema.creatives)
           .where(and(eq(schema.creatives.type, "video"), sql`${schema.creatives.r2Url} is not null`));
         const byKey = new Map<string, (typeof candidates)[number]>();
-        for (const c of candidates) { const k = looseMediaKey(c.name); if (k && !byKey.has(k)) byKey.set(k, c); }
+        for (const c of [...candidates].sort(preferPreview)) { const k = looseMediaKey(c.name); if (k && !byKey.has(k)) byKey.set(k, c); }
         for (const [k, list] of wantKeys) {
           const c = byKey.get(k);
           if (!c) continue;

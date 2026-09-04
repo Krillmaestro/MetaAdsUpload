@@ -62,9 +62,13 @@ async function candidates() {
   const ads = await sql.query(`select a.name, a.video_id, sum(i.spend) as spend from insights i join ads_cache a on a.id=i.entity_id where i.entity_type='ad' and i.date_start>=current_date-90 and i.spend>0 and a.video_id is not null group by a.name, a.video_id`);
   const spendByKey = new Map(); const spendByVideo = new Map();
   for (const a of ads) { const k = looseKey(a.name); if (k) spendByKey.set(k, (spendByKey.get(k) ?? 0) + Number(a.spend)); spendByVideo.set(a.video_id, (spendByVideo.get(a.video_id) ?? 0) + Number(a.spend)); }
+  // Re-uploads leave several rows pointing at the same object: transcode each
+  // object once and copy the result to its siblings (see one()).
+  const seenUrl = new Set();
   return lib
     .map((c) => ({ ...c, spend: (c.meta_video_id ? spendByVideo.get(c.meta_video_id) : 0) || spendByKey.get(looseKey(c.name)) || 0 }))
     .sort((a, b) => b.spend - a.spend || b.id - a.id)
+    .filter((c) => !seenUrl.has(c.r2_url) && seenUrl.add(c.r2_url))
     .slice(0, LIMIT);
 }
 
@@ -90,7 +94,7 @@ async function one(c, dir) {
   const key = `previews/${c.id}.mp4`;
   await s3.send(new PutObjectCommand({ Bucket: BUCKET, Key: key, Body: body, ContentType: "video/mp4", CacheControl: "public, max-age=31536000, immutable" }));
   const url = `${PUBLIC}/${key}`;
-  await sql.query(`update creatives set preview_url=$1, preview_at=now(), preview_error=null where id=$2`, [url, c.id]);
+  await sql.query(`update creatives set preview_url=$1, preview_at=now(), preview_error=null where id=$2 or (r2_url=$3 and preview_url is null)`, [url, c.id, c.r2_url]);
   await rm(src, { force: true }); await rm(out, { force: true });
   console.log(`ok   #${c.id} ${(size / 1e6).toFixed(0)}MB → ${(body.length / 1e6).toFixed(1)}MB in ${((Date.now() - t0) / 1000).toFixed(0)}s  ${c.name.slice(0, 60)}`);
 }
