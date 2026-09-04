@@ -22,7 +22,9 @@ jobs:
         with:
           node-version: 22
       - run: npm ci --ignore-scripts
-      - run: ffmpeg -version | head -1
+      # ubuntu-latest no longer ships ffmpeg; install it (about 30 s).
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg >/dev/null
+      - run: ffmpeg -version
       - run: node scripts/transcode-previews.mjs
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}

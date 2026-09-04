@@ -109,6 +109,9 @@ for (const c of list) {
     failed++;
     const msg = (e instanceof Error ? e.message : String(e)).slice(0, 500);
     console.log(`FAIL #${c.id} ${c.name.slice(0, 60)}: ${msg}`);
+    // A missing ffmpeg (or similar) is the environment's fault, not the file's:
+    // stop here so the rows stay eligible for the next run.
+    if (/ENOENT|EACCES/.test(msg)) { await rm(dir, { recursive: true, force: true }); console.error("environment error, aborting run"); process.exit(1); }
     await sql.query(`update creatives set preview_error=$1, preview_at=now() where id=$2`, [msg, c.id]).catch(() => {});
   }
 }
