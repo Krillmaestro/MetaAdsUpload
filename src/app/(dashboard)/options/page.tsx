@@ -441,7 +441,7 @@ export default function OptionsPage() {
 
       {/* Create Modal */}
       <Dialog open={showCreate} onOpenChange={setShowCreate}>
-        <DialogContent className="max-w-md bg-[#111827] border-white/10">
+        <DialogContent className="w-[92vw] sm:max-w-md bg-[#111827] border-white/10">
           <DialogHeader>
             <DialogTitle className="text-white">Add {currentConfig.label.replace(/s$/, "")}</DialogTitle>
           </DialogHeader>

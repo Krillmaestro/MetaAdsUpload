@@ -544,7 +544,7 @@ export function CampaignTree() {
 
       {/* Duplicate Ad Set Dialog */}
       <Dialog open={showDuplicate} onOpenChange={setShowDuplicate}>
-        <DialogContent className="max-w-md bg-[#111827] border-white/10">
+        <DialogContent className="w-[92vw] sm:max-w-md bg-[#111827] border-white/10">
           <DialogHeader>
             <DialogTitle className="text-white flex items-center gap-2">
               <Copy className="h-5 w-5 text-cyan-400" />

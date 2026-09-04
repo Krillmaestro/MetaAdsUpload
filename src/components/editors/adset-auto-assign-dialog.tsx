@@ -105,7 +105,7 @@ export function AdsetAutoAssignDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-3xl border-white/10 bg-[#111827] text-slate-200">
+      <DialogContent className="w-[96vw] sm:max-w-3xl border-white/10 bg-[#111827] text-slate-200">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-white">
             <Wand2 className="h-4 w-4 text-cyan-400" />

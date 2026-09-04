@@ -940,7 +940,7 @@ export default function EditorsPage() {
 
       {/* Create Payout Modal */}
       <Dialog open={showPayoutModal} onOpenChange={setShowPayoutModal}>
-        <DialogContent className="max-w-md bg-[#111827] border-white/10">
+        <DialogContent className="w-[92vw] sm:max-w-md bg-[#111827] border-white/10">
           <DialogHeader><DialogTitle className="text-white">Create payout</DialogTitle></DialogHeader>
           {payoutEditor && (
             <div className="space-y-4">
@@ -979,7 +979,7 @@ export default function EditorsPage() {
 
       {/* Create Team Member Modal */}
       <Dialog open={showCreateMember} onOpenChange={setShowCreateMember}>
-        <DialogContent className="max-w-md bg-[#111827] border-white/10">
+        <DialogContent className="w-[92vw] sm:max-w-md bg-[#111827] border-white/10">
           <DialogHeader>
             <DialogTitle className="text-white flex items-center gap-2"><Users className="h-4 w-4 text-cyan-400" />Manage team</DialogTitle>
             <DialogDescription className="text-slate-400 text-sm">Add a member (a public page /e/name is generated automatically) or remove existing ones below.</DialogDescription>

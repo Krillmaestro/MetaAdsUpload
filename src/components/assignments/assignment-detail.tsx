@@ -268,7 +268,7 @@ export function AssignmentDetail({
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-3xl max-h-[90vh] p-0">
+        <DialogContent className="w-[96vw] sm:max-w-4xl max-h-[90vh] p-0">
           <DialogHeader className="px-6 pt-6 pb-2">
             <div className="flex items-center justify-between">
               <div>
@@ -973,7 +973,7 @@ export function AssignmentDetail({
 
       {/* Revision Feedback Modal */}
       <Dialog open={showRevisionModal} onOpenChange={setShowRevisionModal}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="w-[92vw] sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <AlertTriangle className="h-5 w-5 text-red-400" />
@@ -1038,7 +1038,7 @@ export function AssignmentDetail({
 
       {/* Delete Confirmation Modal */}
       <Dialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="w-[92vw] sm:max-w-sm">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Trash2 className="h-5 w-5 text-red-400" />

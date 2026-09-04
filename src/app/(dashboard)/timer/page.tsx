@@ -539,7 +539,7 @@ function TimerPageContent() {
 
       {/* Completion Modal */}
       <Dialog open={showCompletionModal} onOpenChange={setShowCompletionModal}>
-        <DialogContent className="max-w-md bg-[#111827] border-white/10">
+        <DialogContent className="w-[92vw] sm:max-w-md bg-[#111827] border-white/10">
           <DialogHeader>
             <DialogTitle className="text-white">Complete Work Session</DialogTitle>
           </DialogHeader>

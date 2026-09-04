@@ -361,7 +361,7 @@ export default function TemplatesPage() {
 
       {/* ─── Create/Edit Dialog ─── */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto bg-[#0f1623] border-white/10">
+        <DialogContent className="w-[96vw] sm:max-w-3xl max-h-[90vh] overflow-y-auto bg-[#0f1623] border-white/10">
           <DialogHeader>
             <DialogTitle className="text-white flex items-center gap-2">
               <FileText className="h-5 w-5 text-cyan-400" />
