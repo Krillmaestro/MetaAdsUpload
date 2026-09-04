@@ -10,6 +10,7 @@ import { CLASSIFICATION_CONFIG } from "@/lib/evolve/classifier";
 import { fmtMoney, fmtNum, fmtPct, fmtX, fmtDate, AWARENESS_LEVELS, STATUS_LABEL, ROLE_CONFIG } from "./format";
 import { VerdictSelect } from "./verdict-select";
 import { LearningDialog, LearningSummary } from "./learning-dialog";
+import { MediaPreview } from "./media-preview";
 import { LinkPicker } from "./link-picker";
 
 function Stat({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent?: string }) {
@@ -130,6 +131,7 @@ export function RowDetails({
             Öppna i Ads Manager <ExternalLink className="h-3 w-3" />
           </a>
         )}
+        {!row.isContainer && <MediaPreview adsetId={row.adsetId} currency={currency} compact />}
       </div>
 
       {/* ── Numbers ── */}
@@ -312,6 +314,7 @@ export function RowDetails({
             format: row.format,
             problem: row.problem,
             landing: row.landing,
+            mediaAdsetId: row.adsetId,
           }}
           currency={currency}
           targetRoas={targetRoas}

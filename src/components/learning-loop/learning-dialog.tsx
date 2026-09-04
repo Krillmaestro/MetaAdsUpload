@@ -11,6 +11,7 @@ import type { LearningNote, LoopAssignmentRef, LoopMetrics, Verdict } from "@/li
 import { LEARNING_DRIVERS, emptyLearning } from "@/lib/learning-loop/rows";
 import { CLASSIFICATION_CONFIG } from "@/lib/evolve/classifier";
 import { fmtMoney, fmtNum, fmtPct, fmtX, VERDICT_CONFIG } from "./format";
+import { MediaPreview } from "./media-preview";
 
 export type LearningTarget =
   | { kind: "adset"; adsetId: string; adsetName: string; campaignId: string | null }
@@ -33,6 +34,10 @@ export interface LearningContext {
   format?: string | null;
   problem?: string | null;
   landing?: string | null;
+  /** Where to fetch the creative(s) from: the ad set's ads, or these ads. */
+  mediaAdsetId?: string | null;
+  mediaAdIds?: string[];
+  highlightAdIds?: string[];
 }
 
 /** First draft of "what happened", written from the numbers so the human starts from facts. */
@@ -212,6 +217,9 @@ export function LearningDialog({
               <div>Problem: <span className="text-slate-300">{context.problem ?? "—"}</span></div>
               <div>Landing: <span className="text-slate-300">{context.landing ?? "—"}</span></div>
             </div>
+            {(context.mediaAdsetId || context.mediaAdIds?.length) && (
+              <MediaPreview adsetId={context.mediaAdsetId} adIds={context.mediaAdIds} highlightAdIds={context.highlightAdIds} currency={currency} />
+            )}
           </div>
 
           {/* ── The note ── */}

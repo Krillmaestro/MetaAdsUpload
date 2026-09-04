@@ -10,6 +10,7 @@ import { CLASSIFICATION_CONFIG } from "@/lib/evolve/classifier";
 import { fmtMoney, fmtNum, fmtPct, fmtX, fmtDate, AWARENESS_LEVELS, STATUS_LABEL, ROLE_CONFIG } from "./format";
 import { VerdictSelect } from "./verdict-select";
 import { LearningDialog, LearningSummary } from "./learning-dialog";
+import { MediaPreview } from "./media-preview";
 import { LinkPicker } from "./link-picker";
 
 function Stat({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent?: string }) {
@@ -221,6 +222,7 @@ export function CreativeDetails({
           <div>Problem: <span className="text-slate-300">{row.problem ?? "—"}</span></div>
           <div>Hook: <span className="text-slate-300">{row.hookLabel ?? "—"}</span></div>
         </div>
+        <MediaPreview adsetId={row.originAdsetId ?? row.ads[0]?.adsetId ?? null} adIds={row.adIds} highlightAdIds={row.adIds} currency={currency} compact />
       </div>
 
       {/* ── Numbers + where it runs ── */}
@@ -310,6 +312,9 @@ export function CreativeDetails({
             format: row.format,
             problem: row.problem,
             landing: row.landing,
+            mediaAdsetId: row.originAdsetId ?? row.ads[0]?.adsetId ?? null,
+            mediaAdIds: row.adIds,
+            highlightAdIds: row.adIds,
           }}
           currency={currency}
           targetRoas={targetRoas}
