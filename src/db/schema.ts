@@ -668,11 +668,39 @@ export const deliverableVersions = pgTable("deliverable_versions", {
   thumbnailUrl: text("thumbnail_url"),
   uploadedById: text("uploaded_by_id").notNull(),
   reviewStatus: text("review_status").notNull().default("no_status"),
-  // no_status | in_progress | needs_review | approved
+  // no_status (not reviewed) | approved | needs_review (revision requested)
+  // One row per FILE (a hook: H1, H2 …). A revision of a file is a new row
+  // with versionNumber + 1 that points back via replacedById on the old row;
+  // the old file is deleted from R2 (deletedAt) and only the fixed one stays.
+  hookLabel: text("hook_label"), // "H1" … parsed from the filename, editable
+  reviewNote: text("review_note"), // the reviewer's note for this file ("cut the intro, subtitles too small")
+  replacedById: text("replaced_by_id"), // → the row that superseded this one
+  replacedAt: timestamp("replaced_at"),
+  deletedAt: timestamp("deleted_at"), // file removed from R2 (replaced or deleted)
+  metaVideoId: text("meta_video_id"), // set when uploaded to Meta
+  metaImageHash: text("meta_image_hash"),
+  metaAdId: text("meta_ad_id"),
+  creativeId: integer("creative_id"), // library row (creatives.id) created at upload to Meta
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => [
   index("dv_assignment_idx").on(table.assignmentId),
   index("dv_version_idx").on(table.assignmentId, table.versionNumber),
+]);
+
+// What the Upload-to-Meta dialog prefills for a product + country: the last
+// campaign/template/budget/landing page used. Written on every publish.
+export const publishDefaults = pgTable("publish_defaults", {
+  id: serial("id").primaryKey(),
+  productId: text("product_id"),
+  countryId: text("country_id"),
+  campaignId: text("campaign_id"),
+  campaignName: text("campaign_name"),
+  templateId: integer("template_id"),
+  dailyBudget: real("daily_budget"), // account currency, whole units
+  landingPage: text("landing_page"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  unique("publish_defaults_product_country").on(table.productId, table.countryId),
 ]);
 
 export const reviewComments = pgTable("review_comments", {

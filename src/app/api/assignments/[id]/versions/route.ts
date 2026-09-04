@@ -2,90 +2,50 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { db, schema } from "@/db";
 import { notifyAssignmentEvent } from "@/lib/notifications";
-import { eq, desc, sql } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
+import { addDeliverableFile, commentsByFile, listDeliverableFiles } from "@/lib/deliverables";
 
-// GET /api/assignments/:id/versions — list all versions for an assignment
+// GET /api/assignments/:id/versions — the assignment's files (one row per
+// hook/file; a revision replaces its file). Active files only unless ?all=1.
+// Each file carries its root review comments so the editor sees what to fix.
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const session = await auth();
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
     const { id } = await params;
+    const all = request.nextUrl.searchParams.get("all") === "1";
 
-    // Verify assignment exists
     const [assignment] = await db.select().from(schema.assignments).where(eq(schema.assignments.id, id));
     if (!assignment) return NextResponse.json({ error: "Assignment not found" }, { status: 404 });
-
-    // Editors can only see their own assignments
     if (session.user.role !== "admin" && assignment.assignedToId !== session.user.id) {
       return NextResponse.json({ error: "Access denied" }, { status: 403 });
     }
 
-    const versions = await db
-      .select({
-        id: schema.deliverableVersions.id,
-        assignmentId: schema.deliverableVersions.assignmentId,
-        versionNumber: schema.deliverableVersions.versionNumber,
-        r2Key: schema.deliverableVersions.r2Key,
-        r2Url: schema.deliverableVersions.r2Url,
-        filename: schema.deliverableVersions.filename,
-        contentType: schema.deliverableVersions.contentType,
-        fileSize: schema.deliverableVersions.fileSize,
-        width: schema.deliverableVersions.width,
-        height: schema.deliverableVersions.height,
-        duration: schema.deliverableVersions.duration,
-        thumbnailR2Key: schema.deliverableVersions.thumbnailR2Key,
-        thumbnailUrl: schema.deliverableVersions.thumbnailUrl,
-        uploadedById: schema.deliverableVersions.uploadedById,
-        reviewStatus: schema.deliverableVersions.reviewStatus,
-        createdAt: schema.deliverableVersions.createdAt,
-        uploaderName: schema.users.name,
-      })
-      .from(schema.deliverableVersions)
-      .leftJoin(schema.users, eq(schema.deliverableVersions.uploadedById, schema.users.id))
-      .where(eq(schema.deliverableVersions.assignmentId, id))
-      .orderBy(desc(schema.deliverableVersions.versionNumber));
+    const files = await listDeliverableFiles(id, { all });
+    const uploaderIds = [...new Set(files.map((f) => f.uploadedById))];
+    const uploaders = uploaderIds.length
+      ? await db.select({ id: schema.users.id, name: schema.users.name }).from(schema.users).where(inArray(schema.users.id, uploaderIds))
+      : [];
+    const nameOf = new Map(uploaders.map((u) => [u.id, u.name]));
+    const comments = await commentsByFile(files.map((f) => f.id));
 
-    // Get comment counts per version
-    let countMap: Record<string, number> = {};
-    if (versions.length > 0) {
-      const commentCounts = await db
-        .select({
-          deliverableVersionId: schema.reviewComments.deliverableVersionId,
-          count: sql<number>`count(*)::int`,
-        })
-        .from(schema.reviewComments)
-        .where(
-          sql`${schema.reviewComments.deliverableVersionId} IN (${sql.join(
-            versions.map((v) => sql`${v.id}`),
-            sql`, `
-          )})`
-        )
-        .groupBy(schema.reviewComments.deliverableVersionId);
-
-      countMap = Object.fromEntries(commentCounts.map((c) => [c.deliverableVersionId, c.count]));
-    }
-
-    const result = versions.map((v) => ({
-      ...v,
-      uploadedBy: { id: v.uploadedById, name: v.uploaderName || "Unknown" },
-      commentCount: countMap[v.id] || 0,
-    }));
-
-    return NextResponse.json(result);
+    return NextResponse.json(files.map((f) => ({
+      ...f,
+      uploadedBy: { id: f.uploadedById, name: nameOf.get(f.uploadedById) || "Unknown" },
+      commentCount: comments.get(f.id)?.length ?? 0,
+      comments: comments.get(f.id) ?? [],
+    })));
   } catch (error) {
     console.error("Versions GET error:", error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Failed to fetch versions" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Failed to fetch versions" }, { status: 500 });
   }
 }
 
-// POST /api/assignments/:id/versions — create a new version
+// POST /api/assignments/:id/versions — register an uploaded file (review page
+// "Upload new version" and scripts). Same rules as PUT /deliverable.
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -93,70 +53,26 @@ export async function POST(
   try {
     const session = await auth();
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
     const { id } = await params;
     const body = await request.json();
-    const { r2Key, r2Url, filename, contentType, fileSize, width, height, duration, thumbnailR2Key, thumbnailUrl } = body;
-
+    const { r2Key, r2Url, filename, contentType, fileSize, width, height, duration, thumbnailR2Key, thumbnailUrl, hookLabel, replacesId } = body;
     if (!r2Key || !r2Url || !filename || !contentType) {
       return NextResponse.json({ error: "r2Key, r2Url, filename, and contentType are required" }, { status: 400 });
     }
 
     const [assignment] = await db.select().from(schema.assignments).where(eq(schema.assignments.id, id));
     if (!assignment) return NextResponse.json({ error: "Assignment not found" }, { status: 404 });
-
     if (session.user.role !== "admin" && assignment.assignedToId !== session.user.id) {
       return NextResponse.json({ error: "Access denied" }, { status: 403 });
     }
 
-    // Determine next version number
-    const [maxVersion] = await db
-      .select({ max: sql<number>`coalesce(max(${schema.deliverableVersions.versionNumber}), 0)` })
-      .from(schema.deliverableVersions)
-      .where(eq(schema.deliverableVersions.assignmentId, id));
-
-    const nextVersion = (maxVersion?.max || 0) + 1;
-
-    const [version] = await db
-      .insert(schema.deliverableVersions)
-      .values({
-        assignmentId: id,
-        versionNumber: nextVersion,
-        r2Key,
-        r2Url,
-        filename,
-        contentType,
-        fileSize: fileSize || null,
-        width: width || null,
-        height: height || null,
-        duration: duration || null,
-        thumbnailR2Key: thumbnailR2Key || null,
-        thumbnailUrl: thumbnailUrl || null,
-        uploadedById: session.user.id!,
-        reviewStatus: "no_status",
-      })
-      .returning();
-
-    // Fire-and-forget WhatsApp notification to admin
+    const { version, replaced } = await addDeliverableFile(assignment, session.user.id!, {
+      r2Key, r2Url, filename, contentType, fileSize, width, height, duration, thumbnailR2Key, thumbnailUrl, hookLabel, replacesId,
+    });
     void notifyAssignmentEvent("version_uploaded", assignment);
-
-    // Update assignment's currentVersionId and deliverableUrl
-    await db
-      .update(schema.assignments)
-      .set({
-        currentVersionId: version.id,
-        deliverableUrl: r2Url,
-        deliverableR2Key: r2Key,
-        updatedAt: new Date(),
-      })
-      .where(eq(schema.assignments.id, id));
-
-    return NextResponse.json(version, { status: 201 });
+    return NextResponse.json({ ...version, replaced: replaced ? { id: replaced.id, filename: replaced.filename, versionNumber: replaced.versionNumber } : null }, { status: 201 });
   } catch (error) {
     console.error("Versions POST error:", error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Failed to create version" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Failed to create version" }, { status: 500 });
   }
 }

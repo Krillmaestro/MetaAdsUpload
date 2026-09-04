@@ -13,7 +13,7 @@ import {
   Circle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { DeliverableVersion, ReviewStatus } from "@/lib/review-types";
+import { fileLabel, hookOrder, type DeliverableVersion, type ReviewStatus } from "@/lib/review-types";
 import { useState } from "react";
 
 const STATUS_BADGE: Record<
@@ -21,7 +21,7 @@ const STATUS_BADGE: Record<
   { label: string; color: string; bgClass: string; icon: React.ElementType }
 > = {
   no_status: {
-    label: "No Status",
+    label: "Pending",
     color: "text-slate-400",
     bgClass: "bg-slate-500/10 border-slate-500/20",
     icon: Circle,
@@ -33,7 +33,7 @@ const STATUS_BADGE: Record<
     icon: Clock,
   },
   needs_review: {
-    label: "Needs Review",
+    label: "Needs revision",
     color: "text-orange-400",
     bgClass: "bg-orange-500/10 border-orange-500/20",
     icon: AlertCircle,
@@ -61,13 +61,13 @@ export function VersionStack({
 }: VersionStackProps) {
   const [expanded, setExpanded] = useState(false);
 
+  // One row per file: H1, H2 … (a revision replaces its file, so the newest
+  // version of each hook is the only one here).
   const sortedVersions = [...versions].sort(
-    (a, b) => b.versionNumber - a.versionNumber
+    (a, b) => hookOrder(a.hookLabel) - hookOrder(b.hookLabel) || b.versionNumber - a.versionNumber
   );
   const currentVersion = sortedVersions.find((v) => v.id === currentVersionId);
-  const currentLabel = currentVersion
-    ? `V${currentVersion.versionNumber}`
-    : "Select Version";
+  const currentLabel = currentVersion ? fileLabel(currentVersion) : "Select file";
 
   return (
     <div className="space-y-1">
@@ -131,7 +131,7 @@ export function VersionStack({
                             isActive ? "text-cyan-400" : "text-slate-200"
                           )}
                         >
-                          V{version.versionNumber}
+                          {fileLabel(version)}
                         </span>
                         <Badge
                           variant="outline"
@@ -146,6 +146,9 @@ export function VersionStack({
                         </Badge>
                       </div>
                       <div className="flex items-center gap-2 mt-0.5 text-[11px] text-slate-500">
+                        {version.hookLabel && (
+                          <span className="truncate max-w-[140px]" title={version.filename}>{version.filename}</span>
+                        )}
                         <span>
                           {version.uploadedBy?.name || "Unknown"}
                         </span>
@@ -181,7 +184,7 @@ export function VersionStack({
                 className="w-full h-8 text-xs border-dashed border-white/10 text-slate-400 hover:text-cyan-400 hover:border-cyan-500/30"
               >
                 <Upload className="h-3 w-3 mr-1.5" />
-                Upload New Version
+                Upload file
               </Button>
             </div>
           )}

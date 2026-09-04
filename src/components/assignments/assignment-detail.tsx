@@ -28,7 +28,6 @@ import {
 } from "@/components/ui/table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Separator } from "@/components/ui/separator";
 import {
   Edit2,
   Calendar,
@@ -48,8 +47,12 @@ import {
   Upload,
   Loader2,
   FlaskConical,
+  Flag,
+  Rocket,
 } from "lucide-react";
 import Link from "next/link";
+import { toast } from "sonner";
+import { UploadToMetaDialog } from "@/components/assignments/upload-to-meta-dialog";
 import { AssignmentPerformance } from "@/components/assignments/assignment-performance";
 import { AWARENESS_LEVELS } from "@/components/learning-loop/format";
 import { cn } from "@/lib/utils";
@@ -71,6 +74,28 @@ const COUNTRY_FLAGS: Record<string, string> = {
   UK: "\u{1F1EC}\u{1F1E7}",
   US: "\u{1F1FA}\u{1F1F8}",
 };
+
+interface DeliverableFile {
+  id: string;
+  hookLabel: string | null;
+  filename: string;
+  r2Url: string;
+  versionNumber: number;
+  reviewStatus: "no_status" | "in_progress" | "needs_review" | "approved";
+  reviewNote: string | null;
+  metaAdId: string | null;
+  commentCount: number;
+  comments: Array<{ id: string; timecodeSeconds: number | null; body: string; author: string; isResolved: boolean }>;
+}
+
+const FILE_STATUS: Record<string, { label: string; className: string }> = {
+  no_status: { label: "Pending", className: "border-slate-500/30 text-slate-400" },
+  in_progress: { label: "Pending", className: "border-slate-500/30 text-slate-400" },
+  approved: { label: "Approved", className: "border-emerald-500/30 text-emerald-400 bg-emerald-500/10" },
+  needs_review: { label: "Needs revision", className: "border-orange-500/30 text-orange-400 bg-orange-500/10" },
+};
+
+const formatTimecode = (s: number) => `${Math.floor(s / 60)}:${Math.floor(s % 60).toString().padStart(2, "0")}`;
 
 interface AssignmentDetailProps {
   open: boolean;
@@ -108,10 +133,12 @@ export function AssignmentDetail({
   const [uploadQueue, setUploadQueue] = useState<{ current: number; total: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // All uploaded deliverable files (one row per file in deliverable_versions)
-  const [deliverableFiles, setDeliverableFiles] = useState<Array<{
-    id: string; filename: string; r2Url: string; versionNumber: number;
-  }>>([]);
+  // The assignment's files — one row per hook/file; a revision replaces its file.
+  const [deliverableFiles, setDeliverableFiles] = useState<DeliverableFile[]>([]);
+  const [noteForFileId, setNoteForFileId] = useState<string | null>(null);
+  const [fileNote, setFileNote] = useState("");
+  const [savingFileId, setSavingFileId] = useState<string | null>(null);
+  const [showUploadDialog, setShowUploadDialog] = useState(false);
 
   const fetchDeliverableFiles = async () => {
     try {
@@ -121,10 +148,33 @@ export function AssignmentDetail({
   };
 
   useEffect(() => {
-    if (open && assignment.deliverableUrl) fetchDeliverableFiles();
-    else if (open) setDeliverableFiles([]);
+    if (open) fetchDeliverableFiles();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, assignment.id]);
+
+  const flaggedFiles = deliverableFiles.filter((f) => f.reviewStatus === "needs_review");
+  const approvedCount = deliverableFiles.filter((f) => f.reviewStatus === "approved").length;
+
+  const setFileStatus = async (fileId: string, reviewStatus: DeliverableFile["reviewStatus"], reviewNote?: string | null) => {
+    setSavingFileId(fileId);
+    try {
+      const res = await fetch(`/api/assignments/${assignment.id}/versions/${fileId}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(reviewNote === undefined ? { reviewStatus } : { reviewStatus, reviewNote }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Could not update file");
+      }
+      await fetchDeliverableFiles();
+      if (reviewStatus === "needs_review") { setNoteForFileId(null); setFileNote(""); }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not update file");
+    } finally {
+      setSavingFileId(null);
+    }
+  };
 
   const uploadOne = async (file: File) => {
     const presignRes = await fetch("/api/upload/presign", {
@@ -206,12 +256,13 @@ export function AssignmentDetail({
     ? COUNTRY_FLAGS[assignment.country.code] || ""
     : "";
 
+  // Flagged files carry the revision; the text here is optional extra context.
+  const canSendRevision = flaggedFiles.length > 0 || revisionFeedback.trim().length > 0;
   const handleSendToRevision = () => {
-    if (revisionFeedback.trim()) {
-      onStatusChange("REVISION", revisionFeedback);
-      setShowRevisionModal(false);
-      setRevisionFeedback("");
-    }
+    if (!canSendRevision) return;
+    onStatusChange("REVISION", revisionFeedback.trim() || undefined);
+    setShowRevisionModal(false);
+    setRevisionFeedback("");
   };
 
   return (
@@ -273,10 +324,12 @@ export function AssignmentDetail({
                       <Button
                         size="sm"
                         className="bg-green-600 hover:bg-green-700"
+                        disabled={flaggedFiles.length > 0}
+                        title={flaggedFiles.length > 0 ? `${flaggedFiles.map((f) => f.hookLabel ?? f.filename).join(", ")} flagged for revision — send the revision or unflag first` : "Approves every file and makes the assignment ready for upload"}
                         onClick={() => onStatusChange("READY_FOR_POSTING")}
                       >
                         <CheckCircle2 className="h-4 w-4 mr-1" />
-                        Approve
+                        Approve all → Ready for upload
                       </Button>
                       <Button
                         size="sm"
@@ -284,18 +337,29 @@ export function AssignmentDetail({
                         onClick={() => setShowRevisionModal(true)}
                       >
                         <AlertTriangle className="h-4 w-4 mr-1" />
-                        Send to Revision
+                        Send revision{flaggedFiles.length > 0 ? ` (${flaggedFiles.length} file${flaggedFiles.length === 1 ? "" : "s"})` : ""}
                       </Button>
                     </>
                   )}
                   {assignment.status === "READY_FOR_POSTING" && (
-                    <Button
-                      size="sm"
-                      onClick={() => onStatusChange("POSTED")}
-                    >
-                      <CheckCircle2 className="h-4 w-4 mr-1" />
-                      Mark as Posted
-                    </Button>
+                    <>
+                      <Button
+                        size="sm"
+                        className="bg-cyan-600 hover:bg-cyan-700"
+                        onClick={() => setShowUploadDialog(true)}
+                      >
+                        <Rocket className="h-4 w-4 mr-1" />
+                        Upload to Meta
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => onStatusChange("POSTED")}
+                      >
+                        <CheckCircle2 className="h-4 w-4 mr-1" />
+                        Mark as Posted
+                      </Button>
+                    </>
                   )}
                   <Select
                     value={assignment.status}
@@ -509,62 +573,174 @@ export function AssignmentDetail({
                 </div>
               </div>
 
-              {/* Deliverable */}
-              {(assignment.deliverableUrl || assignment.googleDriveLink) && (
+              {/* Files */}
+              {(deliverableFiles.length > 0 || assignment.deliverableUrl || assignment.googleDriveLink) && (
                 <Card className="border-blue-500/30 bg-blue-500/5">
                   <CardHeader className="pb-2">
                     <CardTitle className="text-sm font-medium text-blue-400 flex items-center gap-2">
                       <FolderOpen className="h-4 w-4" />
-                      Deliverable
+                      Files
+                      {deliverableFiles.length > 0 && (
+                        <span className="ml-auto text-xs font-normal text-slate-400">
+                          {approvedCount}/{deliverableFiles.length} approved
+                          {flaggedFiles.length > 0 && <span className="text-orange-400"> · {flaggedFiles.length} flagged</span>}
+                        </span>
+                      )}
                     </CardTitle>
                   </CardHeader>
-                  <CardContent className="space-y-2">
-                    {assignment.deliverableUrl && (
-                      <div className="space-y-2">
-                        {deliverableFiles.length > 0 ? (
-                          <div className="space-y-1">
-                            {deliverableFiles.map((f) => (
-                              <a
-                                key={f.id}
-                                href={f.r2Url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-blue-400 hover:text-blue-300 underline flex items-center gap-2 text-sm break-all"
-                              >
-                                {f.filename}
-                                <ExternalLink className="h-3.5 w-3.5 flex-shrink-0" />
-                              </a>
-                            ))}
-                          </div>
-                        ) : (
-                          <a
-                            href={assignment.deliverableUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-blue-400 hover:text-blue-300 underline flex items-center gap-2 text-sm break-all"
+                  <CardContent className="space-y-3">
+                    {deliverableFiles.length > 0 ? (
+                      <div className="rounded-lg border border-white/5 divide-y divide-white/5">
+                        {deliverableFiles.map((f) => {
+                          const st = FILE_STATUS[f.reviewStatus] ?? FILE_STATUS.no_status;
+                          const openComments = f.comments.filter((c) => !c.isResolved);
+                          const editingNote = noteForFileId === f.id;
+                          const busy = savingFileId === f.id;
+                          return (
+                            <div key={f.id} className="px-3 py-2 space-y-2">
+                              <div className="flex items-center gap-2 min-w-0">
+                                {f.hookLabel && (
+                                  <span className="rounded bg-cyan-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-300 flex-shrink-0">{f.hookLabel}</span>
+                                )}
+                                <a
+                                  href={f.r2Url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-blue-400 hover:text-blue-300 underline text-sm truncate min-w-0"
+                                  title={f.filename}
+                                >
+                                  {f.filename}
+                                </a>
+                                {f.versionNumber > 1 && <span className="text-[10px] text-slate-500 flex-shrink-0">v{f.versionNumber}</span>}
+                                <Badge variant="outline" className={cn("text-[10px] flex-shrink-0", st.className)}>{st.label}</Badge>
+                                {f.commentCount > 0 && (
+                                  <span className="flex items-center gap-1 text-[11px] text-slate-500 flex-shrink-0" title={`${openComments.length} open of ${f.commentCount} comments`}>
+                                    <MessageSquare className="h-3 w-3" />{openComments.length > 0 ? openComments.length : f.commentCount}
+                                  </span>
+                                )}
+                                {f.metaAdId && <span className="text-[10px] text-emerald-400 flex-shrink-0">on Meta</span>}
+                                <div className="ml-auto flex items-center gap-1 flex-shrink-0">
+                                  <Link
+                                    href={`/review/${assignment.id}?version=${f.id}`}
+                                    className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-cyan-400 hover:bg-cyan-500/10"
+                                  >
+                                    <Eye className="h-3 w-3" /> Review
+                                  </Link>
+                                  {isAdmin && !f.metaAdId && (
+                                    <>
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        disabled={busy || f.reviewStatus === "approved"}
+                                        className="h-7 px-2 text-[11px] text-emerald-400 hover:bg-emerald-500/10"
+                                        onClick={() => setFileStatus(f.id, "approved")}
+                                      >
+                                        {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3 mr-1" />}
+                                        {f.reviewStatus === "approved" ? "Approved" : "Approve"}
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        disabled={busy}
+                                        className={cn("h-7 px-2 text-[11px] hover:bg-orange-500/10", f.reviewStatus === "needs_review" ? "text-orange-300" : "text-orange-400")}
+                                        onClick={() => {
+                                          if (editingNote) { setNoteForFileId(null); setFileNote(""); }
+                                          else { setNoteForFileId(f.id); setFileNote(f.reviewNote ?? ""); }
+                                        }}
+                                      >
+                                        <Flag className="h-3 w-3 mr-1" />
+                                        {f.reviewStatus === "needs_review" ? "Edit note" : "Revision"}
+                                      </Button>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+
+                              {editingNote && (
+                                <div className="space-y-2 rounded-md border border-orange-500/20 bg-orange-500/5 p-2">
+                                  <Textarea
+                                    value={fileNote}
+                                    onChange={(e) => setFileNote(e.target.value)}
+                                    rows={2}
+                                    autoFocus
+                                    placeholder="What should change in this file? (timecoded comments from Review are included automatically)"
+                                    className="bg-transparent border-orange-500/20 focus:border-orange-500/40 resize-none text-sm"
+                                  />
+                                  <div className="flex items-center gap-2">
+                                    <Button
+                                      size="sm"
+                                      variant="destructive"
+                                      disabled={busy}
+                                      className="h-7 text-[11px]"
+                                      onClick={() => setFileStatus(f.id, "needs_review", fileNote.trim() || null)}
+                                    >
+                                      <Flag className="h-3 w-3 mr-1" /> Flag for revision
+                                    </Button>
+                                    {f.reviewStatus === "needs_review" && (
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        disabled={busy}
+                                        className="h-7 text-[11px] text-slate-400"
+                                        onClick={() => setFileStatus(f.id, "no_status", null)}
+                                      >
+                                        Unflag
+                                      </Button>
+                                    )}
+                                    <Button size="sm" variant="ghost" className="h-7 text-[11px] text-slate-500" onClick={() => { setNoteForFileId(null); setFileNote(""); }}>
+                                      Cancel
+                                    </Button>
+                                  </div>
+                                </div>
+                              )}
+
+                              {f.reviewStatus === "needs_review" && !editingNote && (f.reviewNote || openComments.length > 0) && (
+                                <div className="rounded-md border border-orange-500/20 bg-orange-500/5 px-2.5 py-2 text-xs space-y-1">
+                                  {f.reviewNote && <p className="text-orange-200 whitespace-pre-wrap">{f.reviewNote}</p>}
+                                  {openComments.map((c) => (
+                                    <p key={c.id} className="text-slate-300">
+                                      {c.timecodeSeconds != null && <span className="font-mono text-orange-300 mr-1.5">{formatTimecode(c.timecodeSeconds)}</span>}
+                                      {c.body}
+                                      <span className="text-slate-500"> — {c.author}</span>
+                                    </p>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : assignment.deliverableUrl ? (
+                      <a
+                        href={assignment.deliverableUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-400 hover:text-blue-300 underline flex items-center gap-2 text-sm break-all"
+                      >
+                        Uploaded file
+                        <ExternalLink className="h-4 w-4 flex-shrink-0" />
+                      </a>
+                    ) : null}
+
+                    {(deliverableFiles.length > 0 || assignment.deliverableUrl) && (
+                      <div className="flex items-center gap-3">
+                        <Link
+                          href={`/review/${assignment.id}`}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-500/10 border border-cyan-500/20 text-xs font-medium text-cyan-400 hover:bg-cyan-500/20 transition-all"
+                        >
+                          <Eye className="h-3.5 w-3.5" />
+                          Open Review
+                        </Link>
+                        {isAdmin && assignment.status === "READY_FOR_POSTING" && (
+                          <button
+                            type="button"
+                            onClick={() => setShowUploadDialog(true)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-xs font-medium text-emerald-400 hover:bg-emerald-500/20 transition-all"
                           >
-                            Uploaded file
-                            <ExternalLink className="h-4 w-4 flex-shrink-0" />
-                          </a>
+                            <Rocket className="h-3.5 w-3.5" />
+                            Upload to Meta{approvedCount > 0 ? ` (${approvedCount})` : ""}
+                          </button>
                         )}
-                        <div className="flex items-center gap-3">
-                          <Link
-                            href={`/review/${assignment.id}`}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-500/10 border border-cyan-500/20 text-xs font-medium text-cyan-400 hover:bg-cyan-500/20 transition-all"
-                          >
-                            <Eye className="h-3.5 w-3.5" />
-                            Open Review
-                          </Link>
-                          {isAdmin && (
-                            <Link
-                              href={`/upload?assignment=${assignment.id}`}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-xs font-medium text-emerald-400 hover:bg-emerald-500/20 transition-all"
-                            >
-                              <Upload className="h-3.5 w-3.5" />
-                              Send to Uploader{deliverableFiles.length > 1 ? ` (${deliverableFiles.length})` : ""}
-                            </Link>
-                          )}
-                        </div>
                       </div>
                     )}
                     {assignment.googleDriveLink && (
@@ -804,14 +980,26 @@ export function AssignmentDetail({
               Send to Revision
             </DialogTitle>
           </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            Provide feedback for the editor about what needs to be fixed.
-          </p>
+          {flaggedFiles.length > 0 ? (
+            <div className="rounded-lg border border-orange-500/20 bg-orange-500/5 p-3 text-sm space-y-1">
+              <p className="text-xs text-orange-300 font-medium">The editor gets these files back, with your notes and timecoded comments:</p>
+              {flaggedFiles.map((f) => (
+                <p key={f.id} className="text-slate-300 truncate">
+                  <span className="font-semibold text-orange-200">{f.hookLabel ?? f.filename}</span>
+                  {f.reviewNote && <span className="text-slate-400"> — {f.reviewNote}</span>}
+                </p>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              No file is flagged. Flag the files that need work in the Files list, or write what should change below.
+            </p>
+          )}
           <Textarea
             value={revisionFeedback}
             onChange={(e) => setRevisionFeedback(e.target.value)}
-            rows={4}
-            placeholder="Describe what needs to be revised..."
+            rows={3}
+            placeholder={flaggedFiles.length > 0 ? "Anything else? (optional)" : "Describe what needs to be revised..."}
             autoFocus
           />
           <DialogFooter>
@@ -827,13 +1015,26 @@ export function AssignmentDetail({
             <Button
               variant="destructive"
               onClick={handleSendToRevision}
-              disabled={!revisionFeedback.trim()}
+              disabled={!canSendRevision}
             >
-              Send to Revision
+              Send revision{flaggedFiles.length > 0 ? ` (${flaggedFiles.length})` : ""}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Upload to Meta */}
+      {isAdmin && (
+        <UploadToMetaDialog
+          assignment={assignment}
+          open={showUploadDialog}
+          onOpenChange={setShowUploadDialog}
+          onPublished={() => {
+            fetchDeliverableFiles();
+            onUploadComplete?.();
+          }}
+        />
+      )}
 
       {/* Delete Confirmation Modal */}
       <Dialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>

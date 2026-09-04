@@ -1,4 +1,4 @@
-import { S3Client } from "@aws-sdk/client-s3";
+import { S3Client, DeleteObjectsCommand } from "@aws-sdk/client-s3";
 
 export function getR2Client() {
   const accountId = process.env.R2_ACCOUNT_ID?.trim();
@@ -25,4 +25,19 @@ export function getR2Bucket() {
 
 export function getR2PublicUrl() {
   return process.env.R2_PUBLIC_URL?.trim() || "";
+}
+
+// Remove objects for good. Errors are swallowed on purpose: a file that is
+// already gone must not block the row update that says it is gone.
+export async function deleteR2Objects(keys: Array<string | null | undefined>): Promise<void> {
+  const list = keys.filter((k): k is string => !!k);
+  if (list.length === 0) return;
+  try {
+    await getR2Client().send(new DeleteObjectsCommand({
+      Bucket: getR2Bucket(),
+      Delete: { Objects: list.map((Key) => ({ Key })), Quiet: true },
+    }));
+  } catch (e) {
+    console.error("R2 delete failed:", list, e);
+  }
 }

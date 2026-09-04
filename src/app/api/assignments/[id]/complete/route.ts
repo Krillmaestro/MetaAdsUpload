@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { db, schema } from "@/db";
 import { eq, and, or } from "drizzle-orm";
 import { generateAutoName } from "@/lib/auto-name";
+import { listDeliverableFiles, FLAGGED } from "@/lib/deliverables";
 
 export async function POST(
   request: NextRequest,
@@ -52,6 +53,17 @@ export async function POST(
           videoOutputSeconds: videoLengthSeconds || null,
         })
         .where(eq(schema.timeEntries.id, activeEntry.id));
+    }
+
+    // A flagged file must be replaced (or unflagged) before the work goes back to review.
+    {
+      const files = await listDeliverableFiles(id);
+      const stillFlagged = files.filter((f) => f.reviewStatus === FLAGGED);
+      if (stillFlagged.length > 0) {
+        return NextResponse.json({
+          error: `${stillFlagged.map((f) => f.hookLabel ?? f.filename).join(", ")} är fortfarande markerad för revision — ladda upp den nya versionen först`,
+        }, { status: 400 });
+      }
     }
 
     // Regenerate auto-name if videoLengthSeconds provided

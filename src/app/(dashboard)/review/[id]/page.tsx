@@ -81,11 +81,16 @@ export default function ReviewPage() {
       if (versionsRes.ok) {
         const versionsData = await versionsRes.json();
         setVersions(versionsData);
-        // Only set initial version once to avoid re-fetch loops
+        // Only set initial version once to avoid re-fetch loops.
+        // ?version=<id> (from the assignment detail) wins when it is a live file.
         if (versionsData.length > 0 && !initialVersionSet.current) {
           initialVersionSet.current = true;
+          const wanted = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("version") : null;
+          const ids = new Set((versionsData as DeliverableVersion[]).map((v) => v.id));
           setCurrentVersionId(
-            assignmentData.currentVersionId || versionsData[0].id
+            (wanted && ids.has(wanted) ? wanted : null) ||
+              (assignmentData.currentVersionId && ids.has(assignmentData.currentVersionId) ? assignmentData.currentVersionId : null) ||
+              versionsData[0].id
           );
         }
       }
@@ -305,47 +310,55 @@ export default function ReviewPage() {
       const newVersion = await versionRes.json();
       setCurrentVersionId(newVersion.id);
       await fetchData();
-      toast.success("New version uploaded");
+      toast.success(newVersion.replaced ? `Uploaded — replaces ${newVersion.replaced.filename}` : "File uploaded");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Upload failed");
     }
   };
 
-  // Status change
-  const handleStatusChange = async (status: ReviewStatus) => {
+  // File status: approve / request revision on the selected file only.
+  // The assignment moves separately (handleAssignmentStatusChange).
+  const handleStatusChange = async (status: ReviewStatus, note?: string | null) => {
     if (!currentVersionId) return;
     try {
-      await fetch(
+      const res = await fetch(
         `/api/assignments/${assignmentId}/versions/${currentVersionId}/status`,
         {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ status }),
+          body: JSON.stringify({ reviewStatus: status, ...(note !== undefined ? { reviewNote: note } : {}) }),
         }
       );
-
-      // Also update assignment status if approving
-      if (status === "approved") {
-        await fetch(`/api/assignments/${assignmentId}/status`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ status: "READY_FOR_POSTING" }),
-        });
-      } else if (status === "needs_review") {
-        await fetch(`/api/assignments/${assignmentId}/status`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            status: "REVISION",
-            revisionFeedback: "Changes requested via review",
-          }),
-        });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to update file status");
       }
-
       await fetchData();
-      toast.success(`Status updated to ${status.replace("_", " ")}`);
-    } catch {
-      toast.error("Failed to update status");
+      toast.success(
+        status === "approved" ? "File approved" : status === "needs_review" ? "Revision requested on this file" : "File status cleared"
+      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to update status");
+    }
+  };
+
+  // Assignment status: send the revision (server composes the text from the
+  // flagged files' notes + timecoded comments) or mark it ready for upload.
+  const handleAssignmentStatusChange = async (status: "REVISION" | "READY_FOR_POSTING", feedback?: string) => {
+    try {
+      const res = await fetch(`/api/assignments/${assignmentId}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status, ...(feedback ? { revisionFeedback: feedback } : {}) }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to update assignment");
+      }
+      await fetchData();
+      toast.success(status === "REVISION" ? "Revision sent to the editor" : "Ready for upload to Meta");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to update assignment");
     }
   };
 
@@ -503,6 +516,7 @@ export default function ReviewPage() {
             currentVersion={currentVersion || null}
             onVersionSelect={handleVersionSelect}
             onStatusChange={handleStatusChange}
+            onAssignmentStatusChange={handleAssignmentStatusChange}
             onUploadNew={() => fileInputRef.current?.click()}
             onShareLink={() => {
               fetchShareLinks();

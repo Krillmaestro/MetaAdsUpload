@@ -32,7 +32,23 @@ export interface DeliverableVersion {
   reviewStatus: ReviewStatus;
   commentCount?: number;
   createdAt: string;
+  // One row per FILE (hook). A revision replaces the file: the old row gets
+  // replacedById/deletedAt and drops out of the active list.
+  hookLabel?: string | null;
+  reviewNote?: string | null;
+  replacedById?: string | null;
+  replacedAt?: string | null;
+  deletedAt?: string | null;
+  metaAdId?: string | null;
+  comments?: Array<{ id: string; timecodeSeconds: number | null; body: string; author: string; isResolved: boolean; createdAt: string }>;
 }
+
+/** "H2 · v2", or the filename when the file has no hook label. */
+export function fileLabel(v: Pick<DeliverableVersion, "hookLabel" | "versionNumber" | "filename">): string {
+  return v.hookLabel ? `${v.hookLabel} · v${v.versionNumber}` : `${v.filename.replace(/\.[^.]+$/, "")} · v${v.versionNumber}`;
+}
+
+export const hookOrder = (label: string | null | undefined) => (label ? parseInt(label.slice(1), 10) || 999 : 999);
 
 export interface ReviewComment {
   id: string;

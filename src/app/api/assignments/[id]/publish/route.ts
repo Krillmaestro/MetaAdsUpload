@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { db, schema } from "@/db";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { createCampaign } from "@/lib/meta/campaigns";
 import { createAdSet } from "@/lib/meta/adsets";
 import { createAd, getAdPostId } from "@/lib/meta/ads";
 import { createAdCreative, uploadImage, uploadVideo, waitForVideoReady, getVideoThumbnail } from "@/lib/meta/creatives";
 import { metaApi, getAdAccountId } from "@/lib/meta/client";
 import { applyLinks } from "@/lib/learning-loop/link";
+import { listDeliverableFiles, APPROVED } from "@/lib/deliverables";
 
 export const maxDuration = 300; // large videos: Meta-side download + processing wait
 
@@ -18,6 +19,7 @@ interface CreativeInput {
   deliverableUrl?: string; // R2 public URL — backend downloads from here
   metaVideoId?: string;
   metaImageHash?: string;
+  versionId?: string; // deliverable_versions.id — written back with the Meta ids
 }
 
 interface PublishConfig {
@@ -50,6 +52,9 @@ interface PublishConfig {
 
   // Post ID preservation — reuse existing Facebook post to keep engagement
   sourcePostId?: string; // effective_object_story_id e.g. "page_id_post_id"
+
+  // Which approved files become ads (default: every approved, not yet uploaded file)
+  versionIds?: string[];
 }
 
 export async function POST(
@@ -68,25 +73,28 @@ export async function POST(
     const [assignment] = await db.select().from(schema.assignments).where(eq(schema.assignments.id, id));
     if (!assignment) return NextResponse.json({ error: "Assignment not found" }, { status: 404 });
 
-    // If no creatives provided, auto-use the assignment's deliverable
-    if (!config.creatives?.length && assignment.deliverableUrl) {
-      // Get original filename from deliverable version (not sanitized R2 key)
-      let originalFilename = "deliverable.mp4";
-      if (assignment.currentVersionId) {
-        const [version] = await db
-          .select({ filename: schema.deliverableVersions.filename })
-          .from(schema.deliverableVersions)
-          .where(eq(schema.deliverableVersions.id, assignment.currentVersionId));
-        if (version?.filename) originalFilename = version.filename;
-      } else if (assignment.deliverableR2Key) {
-        originalFilename = assignment.deliverableR2Key.split("/").pop() || "deliverable.mp4";
+    // Files → creatives. Only files that still exist and are approved become
+    // ads; a replaced or flagged file can never slip through. An explicit
+    // versionIds list narrows that set.
+    const files = await listDeliverableFiles(id);
+    if (!config.creatives?.length) {
+      const wanted = config.versionIds?.length ? new Set(config.versionIds) : null;
+      const selected = files.filter((f) => (wanted ? wanted.has(f.id) : f.reviewStatus === APPROVED && !f.metaAdId));
+      const notApproved = selected.filter((f) => f.reviewStatus !== APPROVED);
+      if (notApproved.length > 0) {
+        return NextResponse.json({ error: `${notApproved.map((f) => f.hookLabel ?? f.filename).join(", ")} är inte godkänd` }, { status: 400 });
       }
-      const isImage = /\.(jpg|jpeg|png|webp)$/i.test(originalFilename);
-      config.creatives = [{
-        name: originalFilename,
-        type: isImage ? "image" : "video",
-        deliverableUrl: assignment.deliverableUrl,
-      }];
+      config.creatives = selected.map((f) => ({
+        name: f.filename,
+        type: /\.(jpg|jpeg|png|webp)$/i.test(f.filename) ? "image" : "video",
+        deliverableUrl: f.r2Url,
+        versionId: f.id,
+      }));
+      if (!config.creatives.length && assignment.deliverableUrl && files.length === 0) {
+        // Legacy assignment without file rows: fall back to the single deliverable
+        const originalFilename = assignment.deliverableR2Key?.split("/").pop() || "deliverable.mp4";
+        config.creatives = [{ name: originalFilename, type: /\.(jpg|jpeg|png|webp)$/i.test(originalFilename) ? "image" : "video", deliverableUrl: assignment.deliverableUrl }];
+      }
     }
 
     // Validate
@@ -133,6 +141,15 @@ export async function POST(
 
     // --- Step 1: Campaign ---
     let campaignId = config.campaignId;
+    if (campaignId) {
+      // An existing CBO campaign owns the budget — the ad set must not set one.
+      try {
+        const c = await metaApi<{ daily_budget?: string; lifetime_budget?: string }>(`/${campaignId}`, { params: { fields: "daily_budget,lifetime_budget" } });
+        if (c.daily_budget || c.lifetime_budget) config.budgetType = "CBO";
+      } catch (e) {
+        console.error("campaign budget lookup failed:", e);
+      }
+    }
     if (!campaignId) {
       const campaign = await createCampaign({
         name: config.campaignName || `${countryCode} ${assignment.autoName || assignment.title}`,
@@ -171,6 +188,7 @@ export async function POST(
       creativeId: string;
     }> = [];
 
+    const mediaIds = new Map<string, { videoId?: string; imageHash?: string }>();
     for (const creative of config.creatives) {
       // If sourcePostId is set, skip media upload — reuse existing post
       const useExistingPost = !!config.sourcePostId;
@@ -215,6 +233,7 @@ export async function POST(
           }
         }
 
+        mediaIds.set(creative.name, { videoId, imageHash });
         // Wait for Meta-side processing and grab the auto thumbnail for the creative
         if (videoId && creative.type === "video") {
           await waitForVideoReady(videoId);
@@ -326,6 +345,69 @@ export async function POST(
       })
       .where(eq(schema.assignments.id, id))
       .returning();
+
+    // --- Step 5b: Write the Meta ids back on the files, put them in the
+    // library (Learning Loop + previews find them by video id), and remember
+    // this campaign/template/budget/landing page for the next brief of the
+    // same product + country.
+    try {
+      const editorFull = editor?.name || null;
+      const uploaded = new Map<string, { videoId?: string; imageHash?: string; adId: string }>();
+      for (const c of config.creatives) {
+        if (!c.versionId) continue;
+        const ad = createdAds.find((a) => a.creativeName === c.name);
+        if (ad) uploaded.set(c.versionId, { videoId: mediaIds.get(c.name)?.videoId, imageHash: mediaIds.get(c.name)?.imageHash, adId: ad.adId });
+      }
+      for (const f of files) {
+        const u = uploaded.get(f.id);
+        if (!u) continue;
+        const [lib] = await db.insert(schema.creatives).values({
+          name: f.filename,
+          type: /\.(jpg|jpeg|png|webp)$/i.test(f.filename) ? "image" : "video",
+          source: "r2",
+          r2Key: f.r2Key,
+          r2Url: f.r2Url,
+          thumbnailUrl: f.thumbnailUrl,
+          fileSize: f.fileSize,
+          width: f.width,
+          height: f.height,
+          duration: f.duration,
+          metaVideoId: u.videoId ?? null,
+          metaImageHash: u.imageHash ?? null,
+          assignmentId: id,
+          editorName: editorFull,
+          batchNumber: assignment.batchNumber != null ? String(assignment.batchNumber) : null,
+          status: "uploaded",
+        }).returning({ id: schema.creatives.id });
+        await db.update(schema.deliverableVersions)
+          .set({ metaVideoId: u.videoId ?? null, metaImageHash: u.imageHash ?? null, metaAdId: u.adId, creativeId: lib?.id ?? null })
+          .where(eq(schema.deliverableVersions.id, f.id));
+      }
+
+      let campaignName = config.campaignName ?? null;
+      if (!campaignName && campaignId) {
+        const [cc] = await db.select({ name: schema.campaignsCache.name }).from(schema.campaignsCache).where(eq(schema.campaignsCache.id, campaignId));
+        campaignName = cc?.name ?? null;
+      }
+      const defaultsPatch = {
+        campaignId: campaignId ?? null,
+        campaignName,
+        templateId: config.templateId ?? null,
+        dailyBudget: config.dailyBudget != null ? config.dailyBudget / 100 : null,
+        landingPage: config.landingPages[0] ?? null,
+        updatedAt: new Date(),
+      };
+      const [existing] = await db.select({ id: schema.publishDefaults.id }).from(schema.publishDefaults).where(
+        and(
+          assignment.productId ? eq(schema.publishDefaults.productId, assignment.productId) : isNull(schema.publishDefaults.productId),
+          assignment.countryId ? eq(schema.publishDefaults.countryId, assignment.countryId) : isNull(schema.publishDefaults.countryId),
+        ),
+      );
+      if (existing) await db.update(schema.publishDefaults).set(defaultsPatch).where(eq(schema.publishDefaults.id, existing.id));
+      else await db.insert(schema.publishDefaults).values({ productId: assignment.productId, countryId: assignment.countryId, ...defaultsPatch });
+    } catch (e) {
+      console.error("post-publish bookkeeping failed:", e);
+    }
 
     // --- Step 6: Learning Loop link — the new ad set IS this brief, live.
     // Cache the ad set first so the row has a name before the nightly sync.

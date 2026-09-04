@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { db, schema } from "@/db";
-import { eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
+import { addDeliverableFile } from "@/lib/deliverables";
 
+// PUT /api/assignments/:id/deliverable — register an uploaded file.
+// Body: deliverableUrl, deliverableR2Key, filename, contentType, fileSize,
+// width, height, duration, thumbnailUrl, hookLabel?, replacesId?
 export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -13,10 +17,10 @@ export async function PUT(
 
     const { id } = await params;
     const body = await request.json();
-    const { deliverableUrl, deliverableR2Key, filename, contentType, fileSize, width, height, duration } = body;
+    const { deliverableUrl, deliverableR2Key, filename, contentType, fileSize, width, height, duration, thumbnailUrl, thumbnailR2Key, hookLabel, replacesId } = body;
 
-    if (!deliverableUrl) {
-      return NextResponse.json({ error: "deliverableUrl is required" }, { status: 400 });
+    if (!deliverableUrl || !deliverableR2Key) {
+      return NextResponse.json({ error: "deliverableUrl and deliverableR2Key are required" }, { status: 400 });
     }
 
     const [assignment] = await db.select().from(schema.assignments).where(eq(schema.assignments.id, id));
@@ -26,54 +30,26 @@ export async function PUT(
     if (session.user.role !== "admin" && assignment.assignedToId !== session.user.id) {
       return NextResponse.json({ error: "Not authorized" }, { status: 403 });
     }
-
-    // Create a version record if we have enough info
-    let versionId: string | null = null;
-    if (deliverableR2Key) {
-      const [maxVersion] = await db
-        .select({ max: sql<number>`coalesce(max(${schema.deliverableVersions.versionNumber}), 0)` })
-        .from(schema.deliverableVersions)
-        .where(eq(schema.deliverableVersions.assignmentId, id));
-
-      const nextVersion = (maxVersion?.max || 0) + 1;
-
-      const [version] = await db
-        .insert(schema.deliverableVersions)
-        .values({
-          assignmentId: id,
-          versionNumber: nextVersion,
-          r2Key: deliverableR2Key,
-          r2Url: deliverableUrl,
-          filename: filename || deliverableR2Key.split("/").pop() || "deliverable",
-          contentType: contentType || "video/mp4",
-          fileSize: fileSize || null,
-          width: width || null,
-          height: height || null,
-          duration: duration || null,
-          uploadedById: session.user.id!,
-          reviewStatus: "no_status",
-        })
-        .returning();
-
-      versionId = version.id;
+    if (session.user.role !== "admin" && !["ready_for_editing", "editing_now", "revision"].includes(assignment.status)) {
+      return NextResponse.json({ error: "Uppladdning är stängd i den här statusen" }, { status: 400 });
     }
 
-    const updateData: Record<string, unknown> = {
-      deliverableUrl,
-      deliverableR2Key: deliverableR2Key || null,
-      updatedAt: new Date(),
-    };
-    if (versionId) {
-      updateData.currentVersionId = versionId;
-    }
+    const { version, replaced } = await addDeliverableFile(assignment, session.user.id!, {
+      r2Key: deliverableR2Key,
+      r2Url: deliverableUrl,
+      filename: filename || deliverableR2Key.split("/").pop() || "deliverable",
+      contentType,
+      fileSize,
+      width,
+      height,
+      duration,
+      thumbnailUrl,
+      thumbnailR2Key,
+      hookLabel,
+      replacesId,
+    });
 
-    const [updated] = await db
-      .update(schema.assignments)
-      .set(updateData)
-      .where(eq(schema.assignments.id, id))
-      .returning();
-
-    return NextResponse.json(updated);
+    return NextResponse.json({ ...version, replaced: replaced ? { id: replaced.id, filename: replaced.filename, versionNumber: replaced.versionNumber, hookLabel: replaced.hookLabel } : null });
   } catch (error) {
     console.error("Save deliverable error:", error);
     return NextResponse.json(

@@ -29,7 +29,8 @@ import {
 } from "@/components/assignments/assignment-card";
 import { AssignmentModal } from "@/components/assignments/assignment-modal";
 import { AssignmentDetail } from "@/components/assignments/assignment-detail";
-import { PublishDialog } from "@/components/assignments/publish-dialog";
+import { UploadToMetaDialog } from "@/components/assignments/upload-to-meta-dialog";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
 interface AssignmentBoard {
@@ -188,11 +189,23 @@ export default function AssignmentsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: newStatus }),
       });
-      if (!res.ok) throw new Error("Failed to update status");
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to update status");
+      }
       fetchBoard();
     } catch (err) {
       console.error(err);
+      toast.error(err instanceof Error ? err.message : "Failed to update status");
     }
+  };
+
+  // Keep the open detail in sync after file reviews / uploads / status changes.
+  const refreshViewing = async (id: string) => {
+    try {
+      const res = await fetch(`/api/assignments/${id}`);
+      if (res.ok) setViewingAssignment(await res.json());
+    } catch { /* board refresh still runs */ }
   };
 
   const createDraftAndOpen = async () => {
@@ -435,15 +448,23 @@ export default function AssignmentsPage() {
             setViewingAssignment(null);
             setShowCreateModal(true);
           }}
-          onStatusChange={(status, feedback) => {
-            fetch(`/api/assignments/${viewingAssignment.id}/status`, {
-              method: "PATCH",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ status, revisionFeedback: feedback }),
-            }).then(() => {
-              setViewingAssignment(null);
+          onStatusChange={async (status, feedback) => {
+            try {
+              const res = await fetch(`/api/assignments/${viewingAssignment.id}/status`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ status, revisionFeedback: feedback }),
+              });
+              if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.error || "Failed to update status");
+              }
               fetchBoard();
-            });
+              if (status === "READY_FOR_POSTING") refreshViewing(viewingAssignment.id);
+              else setViewingAssignment(null);
+            } catch (err) {
+              toast.error(err instanceof Error ? err.message : "Failed to update status");
+            }
           }}
           onUpdateNotes={(notes) => {
             fetch(`/api/assignments/${viewingAssignment.id}`, {
@@ -461,13 +482,16 @@ export default function AssignmentsPage() {
             });
           }}
           isAdmin
-          onUploadComplete={() => fetchBoard()}
+          onUploadComplete={() => {
+            fetchBoard();
+            refreshViewing(viewingAssignment.id);
+          }}
         />
       )}
 
-      {/* Publish Dialog */}
+      {/* Upload to Meta (from the kanban card) */}
       {publishingAssignment && (
-        <PublishDialog
+        <UploadToMetaDialog
           assignment={publishingAssignment}
           open={!!publishingAssignment}
           onOpenChange={(open) => { if (!open) setPublishingAssignment(null); }}

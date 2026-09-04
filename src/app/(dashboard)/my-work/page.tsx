@@ -33,6 +33,8 @@ import {
   StickyNote,
   Eye,
   X,
+  Trash2,
+  AlertTriangle,
 } from "lucide-react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
@@ -54,12 +56,54 @@ interface MyAssignmentsResponse {
   total: number;
 }
 
+interface FileComment {
+  id: string;
+  timecodeSeconds: number | null;
+  body: string;
+  author: string;
+  isResolved: boolean;
+}
+
+// One row per file (hook). A revision replaces its file, so the list only
+// ever holds what currently exists.
 interface DeliverableFileInfo {
   id: string;
   filename: string;
   r2Url: string;
+  hookLabel: string | null;
   versionNumber: number;
+  reviewStatus: "no_status" | "in_progress" | "needs_review" | "approved";
+  reviewNote: string | null;
+  metaAdId: string | null;
   createdAt: string;
+  comments: FileComment[];
+}
+
+/** "H2 SE Fervin …mp4" → "H2" (what the server uses to match a revision). */
+const hookLabelOf = (filename: string): string | null => {
+  const m = filename.match(/^\s*(H\d+)(?![A-Za-z0-9])/i);
+  return m ? m[1].toUpperCase() : null;
+};
+
+const formatTimecode = (seconds: number | null) => {
+  if (seconds == null) return null;
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
+};
+
+const FILE_STATUS: Record<DeliverableFileInfo["reviewStatus"], { label: string; className: string }> = {
+  no_status: { label: "Pending", className: "border-white/10 text-slate-400" },
+  in_progress: { label: "Pending", className: "border-white/10 text-slate-400" },
+  approved: { label: "Approved", className: "border-emerald-500/30 text-emerald-400 bg-emerald-500/10" },
+  needs_review: { label: "Needs revision", className: "border-orange-500/30 text-orange-400 bg-orange-500/10" },
+};
+
+interface PendingUpload {
+  assignmentId: string;
+  files: File[];
+  /** index in files → id of the flagged file it replaces, or "" for a new file */
+  replaces: Record<number, string>;
 }
 
 interface AdInsight {
@@ -101,6 +145,13 @@ export default function MyWorkPage() {
   const [uploadQueue, setUploadQueue] = useState<{ current: number; total: number } | null>(null);
   const [versionsByAssignment, setVersionsByAssignment] = useState<Record<string, DeliverableFileInfo[]>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Revision: which flagged file each chosen file replaces, confirmed before upload
+  const [pendingUpload, setPendingUpload] = useState<PendingUpload | null>(null);
+  const [removeConfirmId, setRemoveConfirmId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [revisionDoneIds, setRevisionDoneIds] = useState<Set<string>>(new Set());
+  // Server-side refusals (e.g. a flagged file not yet replaced), per assignment
+  const [actionError, setActionError] = useState<Record<string, string>>({});
 
   // Video length modal state
   const [videoLengthModalId, setVideoLengthModalId] = useState<string | null>(null);
@@ -157,8 +208,9 @@ export default function MyWorkPage() {
     if (expandedId) fetchVersions(expandedId);
   }, [expandedId, fetchVersions]);
 
-  // Upload a single file to R2 and register it as a deliverable
-  const uploadOne = async (assignmentId: string, file: File) => {
+  // Upload a single file to R2 and register it as a deliverable.
+  // replacesId = the flagged file this one is the revision of (server deletes the old file).
+  const uploadOne = async (assignmentId: string, file: File, opts: { replacesId?: string } = {}) => {
     // 1. Get presigned URL
     const presignRes = await fetch("/api/upload/presign", {
       method: "POST",
@@ -206,37 +258,97 @@ export default function MyWorkPage() {
         filename: file.name,
         contentType: file.type,
         fileSize: file.size,
+        hookLabel: hookLabelOf(file.name),
+        replacesId: opts.replacesId || undefined,
       }),
     });
-    if (!saveRes.ok) throw new Error("Failed to save deliverable");
+    if (!saveRes.ok) {
+      const err = await saveRes.json().catch(() => ({}));
+      throw new Error(err.error || "Failed to save deliverable");
+    }
     setUploadProgress(100);
   };
 
   // Upload one or more files, sequentially, with per-file progress
-  const handleUpload = async (assignmentId: string, files: File[]) => {
+  const runUploads = async (assignmentId: string, files: File[], replaces: Record<number, string> = {}) => {
     setUploadingId(assignmentId);
+    setActionError((prev) => ({ ...prev, [assignmentId]: "" }));
     let failedAt: string | null = null;
     try {
       for (let i = 0; i < files.length; i++) {
         setUploadQueue({ current: i + 1, total: files.length });
         setUploadProgress(0);
         failedAt = files[i].name;
-        await uploadOne(assignmentId, files[i]);
+        await uploadOne(assignmentId, files[i], { replacesId: replaces[i] || undefined });
         failedAt = null;
       }
-      await Promise.all([fetchAssignments(), fetchVersions(assignmentId)]);
     } catch (err) {
       console.error("Upload error:", err);
-      alert(
-        (failedAt ? `"${failedAt}": ` : "") +
-        (err instanceof Error ? err.message : "Upload failed")
-      );
+      setActionError((prev) => ({
+        ...prev,
+        [assignmentId]: (failedAt ? `"${failedAt}": ` : "") + (err instanceof Error ? err.message : "Upload failed"),
+      }));
+    } finally {
       // Keep what did upload — refresh so the successful files show
       await Promise.all([fetchAssignments(), fetchVersions(assignmentId)]);
-    } finally {
       setUploadingId(null);
       setUploadQueue(null);
       setUploadProgress(0);
+    }
+  };
+
+  // Files chosen in the picker. When files are flagged for revision, the
+  // editor first confirms which flagged file each upload replaces.
+  const handleUpload = async (assignmentId: string, files: File[]) => {
+    const flagged = (versionsByAssignment[assignmentId] ?? []).filter((v) => v.reviewStatus === "needs_review");
+    if (flagged.length === 0) {
+      await runUploads(assignmentId, files);
+      return;
+    }
+    const replaces: Record<number, string> = {};
+    files.forEach((file, i) => {
+      const label = hookLabelOf(file.name);
+      const byLabel = label ? flagged.find((v) => v.hookLabel === label) : undefined;
+      if (byLabel) replaces[i] = byLabel.id;
+      else if (flagged.length === 1 && files.length === 1) replaces[i] = flagged[0].id;
+      else replaces[i] = "";
+    });
+    setPendingUpload({ assignmentId, files, replaces });
+  };
+
+  const confirmPendingUpload = async () => {
+    if (!pendingUpload) return;
+    const { assignmentId, files, replaces } = pendingUpload;
+    setPendingUpload(null);
+    await runUploads(assignmentId, files, replaces);
+    // Nothing left flagged → the revision is complete
+    try {
+      const res = await fetch(`/api/assignments/${assignmentId}/versions`);
+      if (res.ok) {
+        const versions: DeliverableFileInfo[] = await res.json();
+        setVersionsByAssignment((prev) => ({ ...prev, [assignmentId]: versions }));
+        if (!versions.some((v) => v.reviewStatus === "needs_review")) {
+          setRevisionDoneIds((prev) => new Set(prev).add(assignmentId));
+        }
+      }
+    } catch { /* list refresh is best effort */ }
+  };
+
+  const handleDeleteFile = async (assignmentId: string, versionId: string) => {
+    setDeletingId(versionId);
+    setActionError((prev) => ({ ...prev, [assignmentId]: "" }));
+    try {
+      const res = await fetch(`/api/assignments/${assignmentId}/versions/${versionId}`, { method: "DELETE" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to remove file");
+      }
+      await Promise.all([fetchAssignments(), fetchVersions(assignmentId)]);
+    } catch (err) {
+      setActionError((prev) => ({ ...prev, [assignmentId]: err instanceof Error ? err.message : "Failed to remove file" }));
+    } finally {
+      setDeletingId(null);
+      setRemoveConfirmId(null);
     }
   };
 
@@ -326,11 +438,17 @@ export default function MyWorkPage() {
           videoLengthSeconds: videoLengthInput ? parseInt(videoLengthInput) : undefined,
         }),
       });
-      if (!res.ok) throw new Error("Failed to complete");
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to submit for review");
+      }
+      setActionError((prev) => ({ ...prev, [videoLengthModalId]: "" }));
       setVideoLengthModalId(null);
       fetchAssignments();
     } catch (err) {
       console.error(err);
+      setActionError((prev) => ({ ...prev, [videoLengthModalId]: err instanceof Error ? err.message : "Failed to submit for review" }));
+      setVideoLengthModalId(null);
     } finally {
       setCompletingId(null);
     }
@@ -344,13 +462,124 @@ export default function MyWorkPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: "EDITING_NOW" }),
       });
-      if (!res.ok) throw new Error("Failed to take back");
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to take back");
+      }
       fetchAssignments();
     } catch (err) {
-      console.error(err);
+      setActionError((prev) => ({ ...prev, [assignment.id]: err instanceof Error ? err.message : "Failed to take back" }));
     } finally {
       setTakingBackId(null);
     }
+  };
+
+  // The file list: hook chip, name, version, review status, and for a flagged
+  // file the reviewer's note plus the timecoded comments to act on.
+  const renderFileList = (assignment: EditorAssignment, canManage: boolean) => {
+    const files = versionsByAssignment[assignment.id] ?? [];
+    if (files.length === 0) {
+      return assignment.deliverableUrl ? (
+        <a
+          href={assignment.deliverableUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-1 text-xs text-cyan-400 hover:underline"
+        >
+          View uploaded file <ExternalLink className="h-3 w-3" />
+        </a>
+      ) : null;
+    }
+    return (
+      <div className="space-y-1.5">
+        {files.map((v) => {
+          const status = FILE_STATUS[v.reviewStatus] ?? FILE_STATUS.no_status;
+          const openComments = v.comments.filter((c) => !c.isResolved);
+          const flagged = v.reviewStatus === "needs_review";
+          return (
+            <div
+              key={v.id}
+              className={cn(
+                "rounded-lg border p-2",
+                flagged ? "border-orange-500/20 bg-orange-500/5" : "border-white/5 bg-white/[0.02]"
+              )}
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="inline-flex items-center justify-center min-w-[2rem] px-1.5 h-5 rounded text-[10px] font-semibold tracking-wide bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 flex-shrink-0">
+                  {v.hookLabel ?? "—"}
+                </span>
+                <a
+                  href={v.r2Url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1.5 text-xs text-cyan-400 hover:underline truncate min-w-0"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <FileVideo className="h-3 w-3 flex-shrink-0 text-slate-500" />
+                  <span className="truncate">{v.filename}</span>
+                  <ExternalLink className="h-3 w-3 flex-shrink-0" />
+                </a>
+                {v.versionNumber > 1 && (
+                  <span className="text-[10px] text-slate-500 flex-shrink-0">v{v.versionNumber}</span>
+                )}
+                <Badge variant="outline" className={cn("text-[10px] px-1.5 py-0 h-5 flex-shrink-0 ml-auto", status.className)}>
+                  {status.label}
+                </Badge>
+                {canManage && !v.metaAdId && (
+                  removeConfirmId === v.id ? (
+                    <span className="flex items-center gap-1 text-[11px] flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+                      <span className="text-slate-400">Remove?</span>
+                      <button
+                        onClick={() => handleDeleteFile(assignment.id, v.id)}
+                        disabled={deletingId === v.id}
+                        className="px-1.5 py-0.5 rounded bg-red-500/20 text-red-300 hover:bg-red-500/30 disabled:opacity-50"
+                      >
+                        {deletingId === v.id ? "…" : "Yes"}
+                      </button>
+                      <button
+                        onClick={() => setRemoveConfirmId(null)}
+                        className="px-1.5 py-0.5 rounded bg-white/5 text-slate-300 hover:bg-white/10"
+                      >
+                        No
+                      </button>
+                    </span>
+                  ) : (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setRemoveConfirmId(v.id); }}
+                      title="Remove file"
+                      className="p-1 rounded text-slate-600 hover:text-red-400 hover:bg-red-500/10 flex-shrink-0"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  )
+                )}
+              </div>
+              {flagged && (v.reviewNote || openComments.length > 0) && (
+                <div className="mt-2 ml-1 space-y-1.5">
+                  {v.reviewNote && (
+                    <p className="text-xs text-orange-200/90 whitespace-pre-wrap rounded bg-orange-500/10 border border-orange-500/20 px-2 py-1.5">
+                      {v.reviewNote}
+                    </p>
+                  )}
+                  {openComments.length > 0 && (
+                    <ul className="space-y-0.5">
+                      {openComments.map((c) => (
+                        <li key={c.id} className="flex gap-2 text-xs text-slate-300">
+                          {c.timecodeSeconds != null && (
+                            <span className="font-mono text-orange-400 flex-shrink-0">{formatTimecode(c.timecodeSeconds)}</span>
+                          )}
+                          <span className="whitespace-pre-wrap">{c.body}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
   };
 
   const getInsightForAssignment = (assignmentId: string): AdInsight | undefined => {
@@ -637,17 +866,51 @@ export default function MyWorkPage() {
                           </div>
                         )}
 
-                        {/* Upload Section */}
-                        {canUpload && (
+                        {/* Files */}
+                        {(canUpload || (versionsByAssignment[assignment.id]?.length ?? 0) > 0 || assignment.deliverableUrl) && (
                           <div>
-                            <h4 className="text-xs font-medium text-slate-400 uppercase tracking-wider mb-2">Upload Deliverable</h4>
-                            <div className="rounded-lg border border-white/5 bg-[#0d1220] p-3">
-                              {uploadingId === assignment.id ? (
+                            <h4 className="text-xs font-medium text-slate-400 uppercase tracking-wider mb-2">
+                              {canUpload ? "Upload Deliverable" : "Files"}
+                            </h4>
+                            <div className="rounded-lg border border-white/5 bg-[#0d1220] p-3 space-y-3">
+                              {(versionsByAssignment[assignment.id]?.length ?? 0) > 0 && (
+                                <div className="flex items-center gap-2 text-sm">
+                                  <FileVideo className="h-4 w-4 text-emerald-400" />
+                                  <span className="text-emerald-400 font-medium">
+                                    {versionsByAssignment[assignment.id].length} file{versionsByAssignment[assignment.id].length !== 1 ? "s" : ""}
+                                  </span>
+                                  {versionsByAssignment[assignment.id].some((v) => v.reviewStatus === "needs_review") && (
+                                    <span className="text-xs text-orange-400 flex items-center gap-1">
+                                      <AlertTriangle className="h-3 w-3" />
+                                      {versionsByAssignment[assignment.id].filter((v) => v.reviewStatus === "needs_review").length} need revision
+                                    </span>
+                                  )}
+                                  {!canUpload && (
+                                    <Link
+                                      href={`/review/${assignment.id}`}
+                                      className="ml-auto inline-flex items-center gap-1 text-xs text-cyan-400 hover:underline"
+                                      onClick={(e) => e.stopPropagation()}
+                                    >
+                                      <Eye className="h-3 w-3" /> Review
+                                    </Link>
+                                  )}
+                                </div>
+                              )}
+                              {renderFileList(assignment, canUpload)}
+
+                              {revisionDoneIds.has(assignment.id) && !(versionsByAssignment[assignment.id] ?? []).some((v) => v.reviewStatus === "needs_review") && (
+                                <p className="flex items-center gap-1.5 text-xs text-emerald-400 rounded bg-emerald-500/10 border border-emerald-500/20 px-2 py-1.5">
+                                  <CheckCircle className="h-3.5 w-3.5" />
+                                  All revisions uploaded – send to review
+                                </p>
+                              )}
+
+                              {canUpload && uploadingId === assignment.id && (
                                 <div className="space-y-2">
                                   <div className="flex items-center gap-2 text-sm text-cyan-400">
                                     <Loader2 className="h-4 w-4 animate-spin" />
                                     {uploadQueue && uploadQueue.total > 1
-                                      ? `Uploading video ${uploadQueue.current} of ${uploadQueue.total}...`
+                                      ? `Uploading file ${uploadQueue.current} of ${uploadQueue.total}...`
                                       : "Uploading..."}
                                   </div>
                                   <div className="w-full h-2 bg-white/5 rounded-full overflow-hidden">
@@ -658,41 +921,56 @@ export default function MyWorkPage() {
                                   </div>
                                   <p className="text-xs text-slate-500">{uploadProgress}%</p>
                                 </div>
-                              ) : (
-                                <div className="space-y-2">
-                                  {/* Already uploaded files */}
-                                  {(versionsByAssignment[assignment.id]?.length ?? 0) > 0 ? (
-                                    <div className="space-y-1.5">
-                                      <div className="flex items-center gap-2 text-sm">
-                                        <FileVideo className="h-4 w-4 text-emerald-400" />
-                                        <span className="text-emerald-400 font-medium">
-                                          {versionsByAssignment[assignment.id].length} video{versionsByAssignment[assignment.id].length !== 1 ? "s" : ""} uploaded
-                                        </span>
-                                      </div>
-                                      {versionsByAssignment[assignment.id].map((v) => (
-                                        <a
-                                          key={v.id}
-                                          href={v.r2Url}
-                                          target="_blank"
-                                          rel="noopener noreferrer"
-                                          className="flex items-center gap-1.5 text-xs text-cyan-400 hover:underline truncate"
+                              )}
+
+                              {/* Revision: confirm which flagged file each upload replaces */}
+                              {canUpload && pendingUpload?.assignmentId === assignment.id && uploadingId === null && (
+                                <div className="rounded-lg border border-orange-500/20 bg-orange-500/5 p-3 space-y-2" onClick={(e) => e.stopPropagation()}>
+                                  <p className="text-xs text-orange-300 font-medium">Which file does each upload replace? The old file is deleted.</p>
+                                  {pendingUpload.files.map((file, i) => {
+                                    const flagged = (versionsByAssignment[assignment.id] ?? []).filter((v) => v.reviewStatus === "needs_review");
+                                    return (
+                                      <div key={`${file.name}-${i}`} className="flex items-center gap-2 text-xs">
+                                        <span className="truncate text-slate-300 flex-1 min-w-0" title={file.name}>{file.name}</span>
+                                        <span className="text-slate-600 flex-shrink-0">→</span>
+                                        <select
+                                          value={pendingUpload.replaces[i] ?? ""}
+                                          onChange={(e) => {
+                                            const value = e.target.value;
+                                            setPendingUpload((prev) => prev ? { ...prev, replaces: { ...prev.replaces, [i]: value } } : prev);
+                                          }}
+                                          className="max-w-[55%] px-2 py-1 rounded bg-white/5 border border-white/10 text-slate-200 focus:border-cyan-500/50 focus:outline-none"
                                         >
-                                          <FileVideo className="h-3 w-3 flex-shrink-0 text-slate-500" />
-                                          <span className="truncate">{v.filename}</span>
-                                          <ExternalLink className="h-3 w-3 flex-shrink-0" />
-                                        </a>
-                                      ))}
-                                    </div>
-                                  ) : assignment.deliverableUrl ? (
-                                    <a
-                                      href={assignment.deliverableUrl}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="flex items-center gap-1 text-xs text-cyan-400 hover:underline"
+                                          <option value="">New file</option>
+                                          {flagged.map((v) => (
+                                            <option key={v.id} value={v.id}>
+                                              Replaces {v.hookLabel ?? "—"} · {v.filename}
+                                            </option>
+                                          ))}
+                                        </select>
+                                      </div>
+                                    );
+                                  })}
+                                  <div className="flex gap-2 pt-1">
+                                    <button
+                                      onClick={confirmPendingUpload}
+                                      className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-gradient-to-r from-cyan-500 to-cyan-600 text-xs font-medium text-white hover:from-cyan-400 hover:to-cyan-500 transition-all"
                                     >
-                                      View uploaded file <ExternalLink className="h-3 w-3" />
-                                    </a>
-                                  ) : null}
+                                      <Upload className="h-3.5 w-3.5" />
+                                      Upload {pendingUpload.files.length} file{pendingUpload.files.length !== 1 ? "s" : ""}
+                                    </button>
+                                    <button
+                                      onClick={() => setPendingUpload(null)}
+                                      className="px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-xs text-slate-300 hover:bg-white/10 transition-all"
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+
+                              {canUpload && uploadingId !== assignment.id && pendingUpload?.assignmentId !== assignment.id && (
+                                <div className="space-y-1.5">
                                   <button
                                     onClick={(e) => {
                                       e.stopPropagation();
@@ -703,39 +981,21 @@ export default function MyWorkPage() {
                                   >
                                     <Upload className="h-4 w-4" />
                                     {(versionsByAssignment[assignment.id]?.length ?? 0) > 0 || assignment.deliverableUrl
-                                      ? "Upload More Videos"
-                                      : "Upload Videos"}
+                                      ? "Upload More Files"
+                                      : "Upload Files"}
                                   </button>
-                                  <p className="text-[11px] text-slate-600">You can select multiple files at once</p>
+                                  <p className="text-[11px] text-slate-600">
+                                    You can select multiple files at once. Name files H1 …, H2 … so a revision replaces the right file.
+                                  </p>
                                 </div>
                               )}
-                            </div>
-                          </div>
-                        )}
 
-                        {/* Show deliverable link for non-upload states */}
-                        {!canUpload && assignment.deliverableUrl && (
-                          <div>
-                            <h4 className="text-xs font-medium text-slate-400 uppercase tracking-wider mb-2">Deliverable</h4>
-                            <div className="rounded-lg border border-white/5 bg-[#0d1220] p-3">
-                              <div className="flex items-center gap-3 text-sm">
-                                <FileVideo className="h-4 w-4 text-emerald-400" />
-                                <a
-                                  href={assignment.deliverableUrl}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="text-cyan-400 hover:underline flex items-center gap-1"
-                                >
-                                  View uploaded file <ExternalLink className="h-3 w-3" />
-                                </a>
-                                <Link
-                                  href={`/review/${assignment.id}`}
-                                  className="inline-flex items-center gap-1 text-cyan-400 hover:underline"
-                                  onClick={(e) => e.stopPropagation()}
-                                >
-                                  <Eye className="h-3 w-3" /> Review
-                                </Link>
-                              </div>
+                              {actionError[assignment.id] && (
+                                <p className="flex items-start gap-1.5 text-xs text-red-400 rounded bg-red-500/10 border border-red-500/20 px-2 py-1.5">
+                                  <AlertCircle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
+                                  <span>{actionError[assignment.id]}</span>
+                                </p>
+                              )}
                             </div>
                           </div>
                         )}
@@ -815,6 +1075,12 @@ export default function MyWorkPage() {
                           <Clock className="h-4 w-4 animate-pulse" />
                           <span className="text-sm font-medium">Currently working on this</span>
                         </div>
+                      )}
+                      {actionError[assignment.id] && !canUpload && (versionsByAssignment[assignment.id]?.length ?? 0) === 0 && !assignment.deliverableUrl && (
+                        <p className="flex items-center gap-1.5 text-xs text-red-400">
+                          <AlertCircle className="h-3.5 w-3.5" />
+                          {actionError[assignment.id]}
+                        </p>
                       )}
                     </div>
                   </div>
