@@ -35,6 +35,9 @@ const LIMIT = parseInt(env("LIMIT") || "40", 10) || 40;
 // Parallel backfill: SHARDS jobs run at once, each taking the masters whose
 // object url hashes to its SHARD. Sharding on the url keeps duplicate rows of
 // one object in the same job so they are transcoded once.
+// Only masters behind ads that have spent at least this much (SEK, lifetime)
+// get a preview — nobody opens the learning dialog for a 300 kr test.
+const MIN_SPEND = parseFloat(env("MIN_SPEND") || "2000") || 2000;
 const SHARDS = Math.max(1, parseInt(env("SHARDS") || "1", 10) || 1);
 const SHARD = parseInt(env("SHARD") || "0", 10) || 0;
 const shardOf = (str) => { let h = 0; for (const ch of str) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return h % SHARDS; };
@@ -64,15 +67,21 @@ function run(cmd, args) {
 
 async function candidates() {
   const lib = await sql.query(`select id, name, r2_url, meta_video_id from creatives where type='video' and r2_url is not null and preview_url is null and preview_error is null`);
-  // Spend per ad in the last 90 days → prioritise what people are looking at.
-  const ads = await sql.query(`select a.name, a.video_id, sum(i.spend) as spend from insights i join ads_cache a on a.id=i.entity_id where i.entity_type='ad' and i.date_start>=current_date-90 and i.spend>0 and a.video_id is not null group by a.name, a.video_id`);
+  // Lifetime spend per ad, converted to SEK (DogDivaCO bills in USD).
+  const [conn] = await sql.query(`select ad_accounts from meta_connections limit 1`);
+  const [fx] = await sql.query(`select sek_per_usd from evolve_settings limit 1`);
+  const sekPerUsd = Number(fx?.sek_per_usd) || 10.5;
+  const currencyOf = new Map((conn?.ad_accounts ?? []).map((a) => [String(a.id).replace(/^act_/, ""), a.currency]));
+  const toSek = (spend, accountId) => Number(spend) * (currencyOf.get(String(accountId ?? "").replace(/^act_/, "")) === "USD" ? sekPerUsd : 1);
+  const ads = await sql.query(`select a.name, a.video_id, a.ad_account_id, sum(i.spend) as spend from insights i join ads_cache a on a.id=i.entity_id where i.entity_type='ad' and i.spend>0 and a.video_id is not null group by a.name, a.video_id, a.ad_account_id`);
   const spendByKey = new Map(); const spendByVideo = new Map();
-  for (const a of ads) { const k = looseKey(a.name); if (k) spendByKey.set(k, (spendByKey.get(k) ?? 0) + Number(a.spend)); spendByVideo.set(a.video_id, (spendByVideo.get(a.video_id) ?? 0) + Number(a.spend)); }
+  for (const a of ads) { const sek = toSek(a.spend, a.ad_account_id); const k = looseKey(a.name); if (k) spendByKey.set(k, (spendByKey.get(k) ?? 0) + sek); spendByVideo.set(a.video_id, (spendByVideo.get(a.video_id) ?? 0) + sek); }
   // Re-uploads leave several rows pointing at the same object: transcode each
   // object once and copy the result to its siblings (see one()).
   const seenUrl = new Set();
   return lib
     .map((c) => ({ ...c, spend: (c.meta_video_id ? spendByVideo.get(c.meta_video_id) : 0) || spendByKey.get(looseKey(c.name)) || 0 }))
+    .filter((c) => c.spend >= MIN_SPEND)
     .sort((a, b) => b.spend - a.spend || b.id - a.id)
     .filter((c) => shardOf(c.r2_url) === SHARD)
     .filter((c) => !seenUrl.has(c.r2_url) && seenUrl.add(c.r2_url))
@@ -108,7 +117,7 @@ async function one(c, dir) {
 
 const dir = await mkdtemp(join(tmpdir(), "previews-"));
 const list = await candidates();
-console.log(`${list.length} masters to preview (limit ${LIMIT}, shard ${SHARD + 1}/${SHARDS})`);
+console.log(`${list.length} masters to preview (spend ≥ ${MIN_SPEND} kr, limit ${LIMIT}, shard ${SHARD + 1}/${SHARDS})`);
 let ok = 0, failed = 0;
 for (const c of list) {
   try { await one(c, dir); ok++; }
