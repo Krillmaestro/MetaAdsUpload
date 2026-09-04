@@ -190,7 +190,7 @@ export default function DailySummaryPage() {
         </div>
         <div className="flex items-center gap-2">
           <Link
-            href="/ad-analyzer"
+            href="/learning-loop"
             className="px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-sm text-slate-300 hover:bg-white/10 transition-all"
           >
             Ad Analyzer <ChevronRight className="inline h-3.5 w-3.5" />

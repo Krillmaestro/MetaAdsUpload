@@ -905,11 +905,9 @@ export const workSessions = pgTable("work_sessions", {
 ]);
 
 // ─── LogRocket snapshots ─────────────────────────────────────────────────────
-// Every LogRocket pull is stored whole and never overwritten, so the /logrocket
-// page can show any earlier version and diff the current one against it. The
-// payload is validated against `payloadSchema` (src/lib/logrocket-types.ts)
-// before it lands here, which is what lets an old row still render after the
-// shape grows.
+// Every LogRocket pull was stored whole and never overwritten. The
+// The LogRocket page was removed (Sept 2026); the table is kept so the one
+// stored snapshot is not lost.
 
 export const logrocketSnapshots = pgTable("logrocket_snapshots", {
   id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
@@ -919,7 +917,7 @@ export const logrocketSnapshots = pgTable("logrocket_snapshots", {
   // Denormalised off the payload so the version picker sorts without parsing json.
   windowStart: text("window_start").notNull(),
   windowEnd: text("window_end").notNull(),
-  payload: jsonb("payload").$type<import("@/lib/logrocket-types").LogRocketPayload>().notNull(),
+  payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
   createdBy: text("created_by"),
   createdByName: text("created_by_name"),
   capturedAt: timestamp("captured_at").defaultNow().notNull(),

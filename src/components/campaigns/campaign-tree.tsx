@@ -240,7 +240,7 @@ export function CampaignTree() {
         return;
       }
 
-      const res = await fetch(`/api/meta/scaling?status=ALL&since=${since}&until=${until}`);
+      const res = await fetch(`/api/meta/adsets/insights?since=${since}&until=${until}`);
       if (!res.ok) return;
       const data = await res.json();
 
