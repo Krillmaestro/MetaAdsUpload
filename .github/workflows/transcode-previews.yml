@@ -9,13 +9,33 @@ on:
   workflow_dispatch:
     inputs:
       limit:
-        description: "Max masters per run"
+        description: "Max masters per job"
         default: "40"
+      shards:
+        description: "Parallel jobs (backfill: 8)"
+        default: "1"
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      shards: ${{ steps.list.outputs.shards }}
+      total: ${{ steps.list.outputs.total }}
+    steps:
+      - id: list
+        run: |
+          n="${{ github.event.inputs.shards || '1' }}"
+          echo "total=$n" >> "$GITHUB_OUTPUT"
+          echo "shards=$(seq -s, 0 $((n - 1)) | sed 's/^/[/; s/$/]/')" >> "$GITHUB_OUTPUT"
+
   transcode:
+    needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -34,3 +54,5 @@ jobs:
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
           R2_PUBLIC_URL: ${{ secrets.R2_PUBLIC_URL }}
           LIMIT: ${{ github.event.inputs.limit || '40' }}
+          SHARDS: ${{ needs.plan.outputs.total }}
+          SHARD: ${{ matrix.shard }}

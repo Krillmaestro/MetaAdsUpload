@@ -32,6 +32,12 @@ const s3 = new S3Client({
 const BUCKET = env("R2_BUCKET_NAME");
 const PUBLIC = env("R2_PUBLIC_URL").replace(/\/$/, "");
 const LIMIT = parseInt(env("LIMIT") || "40", 10) || 40;
+// Parallel backfill: SHARDS jobs run at once, each taking the masters whose
+// object url hashes to its SHARD. Sharding on the url keeps duplicate rows of
+// one object in the same job so they are transcoded once.
+const SHARDS = Math.max(1, parseInt(env("SHARDS") || "1", 10) || 1);
+const SHARD = parseInt(env("SHARD") || "0", 10) || 0;
+const shardOf = (str) => { let h = 0; for (const ch of str) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return h % SHARDS; };
 
 // Same loose identity as src/lib/learning-loop/derive.ts (kept in sync by hand:
 // this script runs without the TypeScript build).
@@ -68,6 +74,7 @@ async function candidates() {
   return lib
     .map((c) => ({ ...c, spend: (c.meta_video_id ? spendByVideo.get(c.meta_video_id) : 0) || spendByKey.get(looseKey(c.name)) || 0 }))
     .sort((a, b) => b.spend - a.spend || b.id - a.id)
+    .filter((c) => shardOf(c.r2_url) === SHARD)
     .filter((c) => !seenUrl.has(c.r2_url) && seenUrl.add(c.r2_url))
     .slice(0, LIMIT);
 }
@@ -101,7 +108,7 @@ async function one(c, dir) {
 
 const dir = await mkdtemp(join(tmpdir(), "previews-"));
 const list = await candidates();
-console.log(`${list.length} masters to preview (limit ${LIMIT})`);
+console.log(`${list.length} masters to preview (limit ${LIMIT}, shard ${SHARD + 1}/${SHARDS})`);
 let ok = 0, failed = 0;
 for (const c of list) {
   try { await one(c, dir); ok++; }
