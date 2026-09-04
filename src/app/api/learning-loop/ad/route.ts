@@ -15,6 +15,8 @@ const body = z.object({
   hookLabel: z.string().max(10).nullable().optional(),
   /** string = link to that brief, null = unlink, undefined = untouched */
   assignmentId: z.string().nullable().optional(),
+  /** The ad set this creative was tested in; null = back to automatic resolution. */
+  originAdsetId: z.string().nullable().optional(),
 });
 
 /** PATCH — verdict, learnings, script and the brief link for ONE creative (= its ads). */
@@ -32,6 +34,7 @@ export async function PATCH(request: NextRequest) {
     if (b.learnings !== undefined) { set.learnings = b.learnings?.trim() || null; set.learningsAt = b.learnings?.trim() ? now : null; }
     if (b.script !== undefined) set.script = b.script?.trim() || null;
     if (b.hookLabel !== undefined) set.hookLabel = b.hookLabel?.trim().toUpperCase() || null;
+    if (b.originAdsetId !== undefined) { set.originAdsetId = b.originAdsetId || null; set.originSource = b.originAdsetId ? "manual" : null; }
 
     if (Object.keys(set).length > 1) {
       const [existing, cached] = await Promise.all([

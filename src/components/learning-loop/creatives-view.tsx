@@ -72,7 +72,7 @@ export function CreativesView({ account, period, periodLabel }: { account: strin
   const rows = useMemo(() => {
     if (!data) return [];
     const list = data.rows.filter((r) =>
-      matchesFilters(r, filters, `${r.name} ${r.ads.map((a) => `${a.adsetName} ${a.campaignName ?? ""}`).join(" ")} ${r.editorName ?? ""} ${r.problem ?? ""} ${r.assignment?.autoName ?? ""} ${r.assignment?.batchNumber ?? ""} ${r.script ?? ""}`),
+      matchesFilters(r, filters, `${r.name} ${r.originAdsetName ?? ""} ${r.ads.map((a) => `${a.adsetName} ${a.campaignName ?? ""}`).join(" ")} ${r.editorName ?? ""} ${r.problem ?? ""} ${r.assignment?.autoName ?? ""} ${r.assignment?.batchNumber ?? ""} ${r.script ?? ""}`),
     );
     const dir = sort.dir === "asc" ? 1 : -1;
     list.sort((a, b) => {
@@ -169,8 +169,14 @@ export function CreativesView({ account, period, periodLabel }: { account: strin
                         <span className="truncate font-medium text-slate-200" title={r.name}>{r.name}</span>
                       </div>
                       <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-slate-500">
-                        <span>{r.ads.length} annons{r.ads.length === 1 ? "" : "er"} · {r.adsetIds.length} ad set</span>
-                        <span className="truncate" title={r.ads[0]?.adsetName}>{r.ads[0]?.adsetName}</span>
+                        <span className="shrink-0">{r.ads.length} annons{r.ads.length === 1 ? "" : "er"} · {r.adsetIds.length} ad set</span>
+                        {r.originAdsetName ? (
+                          <span className="truncate" title={`Ursprung: ${r.originAdsetName}`}>
+                            <span className={cn(r.originSource === "manual" ? "text-cyan-400" : "text-slate-500")}>↳</span> {r.originAdsetName}
+                          </span>
+                        ) : (
+                          <span className="truncate text-amber-500/70" title="Ligger bara i scaling-behållare — välj ursprungs-ad set i raden">ursprung saknas</span>
+                        )}
                       </div>
                     </td>
                     <td className="px-2 py-2">
@@ -223,7 +229,7 @@ export function CreativesView({ account, period, periodLabel }: { account: strin
         </table>
       </div>
       <p className="text-[11px] text-slate-600">
-        En creative = samma video/bild eller samma annonsnamn i alla ad sets den kopierats till (testing, scaling, graveyard). Brief-koppling ärvs från ad setet om creativen inte har en egen; i scaling-set kopplar du per creative. Scriptet hämtas från briefens hook (H1/H2…) eller skrivs in direkt.
+        En creative = samma video/bild eller samma annonsnamn i alla ad sets den kopierats till (testing, scaling, graveyard). Raden under namnet (↳) är ursprungs-ad setet där creativen testades — dit bokförs scaling-kopiornas resultat i Ad sets-vyn. Brief-koppling ärvs från ursprunget om creativen inte har en egen. Scriptet hämtas från briefens hook (H1/H2…) eller skrivs in direkt.
       </p>
     </>
   );

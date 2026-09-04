@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Check, ExternalLink, FlaskConical, Link2, Loader2, ScrollText, Sparkles, Unlink } from "lucide-react";
+import { Check, ExternalLink, FlaskConical, Link2, Loader2, MapPin, ScrollText, Sparkles, Unlink } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import type { CreativeRow } from "@/lib/learning-loop/rows";
@@ -91,9 +91,31 @@ export function CreativeDetails({
   onRefresh: () => void;
 }) {
   const [picker, setPicker] = useState(false);
-  const [busy, setBusy] = useState<"unlink" | "suggest" | null>(null);
+  const [originPicker, setOriginPicker] = useState(false);
+  const [busy, setBusy] = useState<"unlink" | "suggest" | "origin" | null>(null);
   const cls = CLASSIFICATION_CONFIG[row.classification];
   const a = row.assignment;
+  const ORIGIN_SOURCE_LABEL: Record<string, string> = {
+    manual: "satt manuellt",
+    testing: "ABO-setet den testades i",
+    name: "matchat på namn",
+    earliest: "äldsta ad setet",
+    only: "enda ad setet",
+  };
+
+  const resetOrigin = async () => {
+    setBusy("origin");
+    try {
+      const res = await fetch("/api/learning-loop/ad", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ adIds: row.adIds, originAdsetId: null }) });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Kunde inte återställa");
+      toast.success("Ursprung återställt till automatiskt");
+      onRefresh();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Kunde inte återställa");
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const link = async (assignmentId: string | null, kind: "unlink" | "suggest") => {
     setBusy(kind);
@@ -154,6 +176,33 @@ export function CreativeDetails({
         ) : (
           <div className="rounded-lg border border-dashed border-white/10 p-3 text-xs text-slate-500">Inget brief kopplat. Koppla den så att hypotes, script och resultat hamnar på samma rad.</div>
         )}
+        {/* ── Origin: where the creative was TESTED — its learning lives there ── */}
+        <div className="rounded-lg border border-white/5 bg-white/[0.02] px-3 py-2">
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500"><MapPin className="h-3 w-3" /> Ursprungs-ad set</div>
+              {row.originAdsetId ? (
+                <div className="truncate text-xs text-slate-200" title={row.originAdsetName ?? row.originAdsetId}>{row.originAdsetName ?? row.originAdsetId}</div>
+              ) : (
+                <div className="text-xs italic text-slate-500">Bara i behållare — inget testset hittat</div>
+              )}
+              <div className="text-[10px] text-slate-600">
+                {row.originSource ? ORIGIN_SOURCE_LABEL[row.originSource] ?? row.originSource : "välj det ABO-set den testades i"}
+                {row.ads.some((x) => x.isContainer) && " · ligger i scaling-behållare"}
+              </div>
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+              <button type="button" onClick={() => setOriginPicker(true)} className="inline-flex items-center gap-1 rounded-md border border-white/10 px-2 py-1 text-[11px] text-slate-300 hover:bg-white/5">
+                <MapPin className="h-3 w-3" /> {row.originSource === "manual" ? "Byt" : "Välj"}
+              </button>
+              {row.originSource === "manual" && (
+                <button type="button" onClick={resetOrigin} disabled={busy === "origin"} title="Tillbaka till automatisk" className="rounded-md border border-white/10 px-2 py-1 text-[11px] text-slate-500 hover:bg-white/5">
+                  {busy === "origin" ? <Loader2 className="h-3 w-3 animate-spin" /> : "Auto"}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
         <ScriptEditor row={row} onSaved={(script) => onPatch({ script, scriptSource: script ? (script === row.scriptFromAssignment ? "assignment" : "own") : null })} />
         <div className="grid grid-cols-2 gap-1 text-[11px] text-slate-500">
           <div>Editor: <span className="text-slate-300">{row.editorName ?? "—"}</span></div>
@@ -203,6 +252,8 @@ export function CreativeDetails({
                       <div className="flex items-center gap-1.5">
                         <span className={cn("inline-block h-1.5 w-1.5 shrink-0 rounded-full", ad.status === "ACTIVE" ? "bg-emerald-400" : "bg-slate-600")} />
                         <span className={cn("shrink-0 rounded px-1 py-px text-[9px]", role.bg, role.color)}>{ad.roleLabel}</span>
+                        {ad.isOrigin && <span className="shrink-0 rounded bg-cyan-500/10 px-1 py-px text-[9px] text-cyan-300" title="Ursprung — här testades creativen">ursprung</span>}
+                        {ad.isContainer && <span className="shrink-0 rounded bg-white/5 px-1 py-px text-[9px] text-slate-500" title="Scaling-behållare med creatives från flera briefs">behållare</span>}
                         <span className="truncate text-slate-300" title={`${ad.name} · ${ad.adsetName}`}>{ad.adsetName}</span>
                       </div>
                       {ad.name !== row.name && <div className="truncate pl-3 text-[10px] text-slate-600" title={ad.name}>{ad.name}</div>}
@@ -236,6 +287,9 @@ export function CreativeDetails({
 
       {picker && (
         <LinkPicker mode="creative" adIds={row.adIds} creativeName={row.name} open={picker} onOpenChange={setPicker} onLinked={() => { setPicker(false); onRefresh(); }} />
+      )}
+      {originPicker && (
+        <LinkPicker mode="origin" adIds={row.adIds} creativeName={row.name} open={originPicker} onOpenChange={setOriginPicker} onLinked={() => { setOriginPicker(false); onRefresh(); }} />
       )}
     </div>
   );

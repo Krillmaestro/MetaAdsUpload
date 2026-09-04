@@ -55,6 +55,15 @@ type Props =
       onLinked: (assignmentId: string) => void;
     }
   | {
+      /** Pick the ORIGIN ad set (where the creative was tested) for a creative. */
+      mode: "origin";
+      adIds: string[];
+      creativeName: string;
+      open: boolean;
+      onOpenChange: (o: boolean) => void;
+      onLinked: (adsetId: string) => void;
+    }
+  | {
       mode: "assignment";
       assignmentId: string;
       assignmentName: string;
@@ -67,6 +76,7 @@ type Props =
  * Manual linking in every direction:
  *  - mode "adset":      pick the brief this ad set runs
  *  - mode "creative":   pick the brief this creative (its ads) is
+ *  - mode "origin":     pick the ad set a creative was TESTED in (its origin)
  *  - mode "assignment": pick the ad set(s) this brief runs in (with the
  *    name-matcher's suggestions on top)
  */
@@ -91,6 +101,12 @@ export function LinkPicker(props: Props) {
         .then((d: AssignmentLite[]) => setAssignments(Array.isArray(d) ? d.filter((a) => a.status !== "DRAFT") : []))
         .catch(() => setAssignments([]))
         .finally(() => setLoading(false));
+    } else if (props.mode === "origin") {
+      fetch("/api/learning-loop/adsets?q=")
+        .then((r) => r.json())
+        .then((d) => setAdsets((d.adsets ?? []) as AdsetLite[]))
+        .catch(() => setAdsets([]))
+        .finally(() => setLoading(false));
     } else {
       Promise.all([
         fetch(`/api/learning-loop/links?assignmentId=${props.assignmentId}`).then((r) => r.json()).catch(() => ({ proposals: [] })),
@@ -105,9 +121,9 @@ export function LinkPicker(props: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  // Server-side ad set search as the query changes (assignment mode).
+  // Server-side ad set search as the query changes (assignment / origin mode).
   useEffect(() => {
-    if (!open || props.mode !== "assignment") return;
+    if (!open || (props.mode !== "assignment" && props.mode !== "origin")) return;
     const t = setTimeout(() => {
       fetch(`/api/learning-loop/adsets?q=${encodeURIComponent(q)}`)
         .then((r) => r.json())
@@ -126,7 +142,7 @@ export function LinkPicker(props: Props) {
   }, [assignments, q]);
 
   const linkAdsetToAssignment = async (assignmentId: string) => {
-    if (props.mode === "assignment") return;
+    if (props.mode === "assignment" || props.mode === "origin") return;
     setSaving(true);
     try {
       const res = await fetch(props.mode === "creative" ? "/api/learning-loop/ad" : "/api/learning-loop/adset", {
@@ -172,17 +188,40 @@ export function LinkPicker(props: Props) {
 
   const toggle = (id: string) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
 
+  const pickOrigin = async (adsetId: string) => {
+    if (props.mode !== "origin") return;
+    setSaving(true);
+    try {
+      const res = await fetch("/api/learning-loop/ad", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ adIds: props.adIds, originAdsetId: adsetId }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Kunde inte spara ursprung");
+      toast.success("Ursprungs-ad set satt");
+      props.onLinked(adsetId);
+      onOpenChange(false);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Kunde inte spara ursprung");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl bg-[#0d1117] border-white/10">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-white">
             <Link2 className="h-4 w-4 text-cyan-400" />
-            {props.mode === "adset" ? "Koppla ad set till brief" : props.mode === "creative" ? "Koppla creative till brief" : "Koppla brief till ad set"}
+            {props.mode === "adset" ? "Koppla ad set till brief" : props.mode === "creative" ? "Koppla creative till brief" : props.mode === "origin" ? "Välj ursprungs-ad set" : "Koppla brief till ad set"}
           </DialogTitle>
           <p className="text-xs text-slate-500 truncate">
-            {props.mode === "adset" ? props.adsetName : props.mode === "creative" ? props.creativeName : props.assignmentName}
+            {props.mode === "adset" ? props.adsetName : props.mode === "creative" || props.mode === "origin" ? props.creativeName : props.assignmentName}
           </p>
+          {props.mode === "origin" && (
+            <p className="text-xs text-slate-500">Det ad set där creativen TESTADES. Resultatet från scaling-kopior bokförs där.</p>
+          )}
         </DialogHeader>
 
         <div className="relative">
@@ -191,7 +230,7 @@ export function LinkPicker(props: Props) {
             autoFocus
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder={props.mode === "assignment" ? "Sök ad set-namn…" : "Sök batch, namn, editor, produkt…"}
+            placeholder={props.mode === "assignment" || props.mode === "origin" ? "Sök ad set-namn…" : "Sök batch, namn, editor, produkt…"}
             className="pl-9 bg-white/5 border-white/10 text-sm"
           />
         </div>
@@ -199,6 +238,25 @@ export function LinkPicker(props: Props) {
         <div className="max-h-[50vh] space-y-1 overflow-y-auto pr-1">
           {loading ? (
             <div className="flex items-center justify-center py-10 text-slate-500"><Loader2 className="h-5 w-5 animate-spin" /></div>
+          ) : props.mode === "origin" ? (
+            adsets.length === 0 ? (
+              <p className="py-8 text-center text-sm text-slate-500">Inga ad sets hittades.</p>
+            ) : (
+              adsets.map((s) => (
+                <button
+                  key={s.adsetId}
+                  type="button"
+                  disabled={saving}
+                  onClick={() => pickOrigin(s.adsetId)}
+                  className="flex w-full items-center justify-between rounded-lg border border-white/5 bg-white/[0.02] px-3 py-2 text-left hover:border-cyan-500/30 hover:bg-cyan-500/5"
+                >
+                  <div className="min-w-0">
+                    <div className="truncate text-sm text-slate-200">{s.name}</div>
+                    <div className="truncate text-[11px] text-slate-500">{s.campaignName ?? s.campaignId ?? "—"}</div>
+                  </div>
+                </button>
+              ))
+            )
           ) : props.mode !== "assignment" ? (
             filteredAssignments.length === 0 ? (
               <p className="py-8 text-center text-sm text-slate-500">Inga briefs hittades</p>

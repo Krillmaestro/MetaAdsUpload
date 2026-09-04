@@ -151,7 +151,42 @@ export interface LearningLoopRow {
   outcome: Outcome;
   judged: boolean;
   ads: LoopAd[];
+  /** A CBO scaling container ("Scaling Winners - POSTID") — many briefs, never a test itself. */
+  isContainer: boolean;
+  creativesCount: number;
+  /** Copies of THIS ad set's creatives running elsewhere (scaling, BOF, graveyard). */
+  scaled: { window: LoopMetrics; lifetime: LoopMetrics; copies: ScaledCopy[] };
+  /** Own + scaled. */
+  total: { window: LoopMetrics; lifetime: LoopMetrics };
+  /** For containers: what is inside and where each creative came from. */
+  containerCreatives: ContainerCreative[];
 }
+
+export interface ScaledCopy {
+  adId: string;
+  name: string;
+  status: string | null;
+  adsetId: string;
+  adsetName: string;
+  role: CampaignRole;
+  roleLabel: string;
+  window: LoopMetrics;
+  lifetime: LoopMetrics;
+}
+
+export interface ContainerCreative {
+  key: string;
+  name: string;
+  hookLabel: string | null;
+  adIds: string[];
+  originAdsetId: string | null;
+  originAdsetName: string | null;
+  originSource: OriginSource;
+  window: LoopMetrics;
+  lifetime: LoopMetrics;
+}
+
+export type OriginSource = "manual" | "testing" | "name" | "earliest" | "only" | null;
 
 /** One ad of a creative, in one ad set. */
 export interface CreativeAdRef {
@@ -164,6 +199,8 @@ export interface CreativeAdRef {
   campaignName: string | null;
   role: CampaignRole;
   roleLabel: string;
+  isContainer: boolean;
+  isOrigin: boolean;
   window: LoopMetrics;
   lifetime: LoopMetrics;
 }
@@ -187,6 +224,10 @@ export interface CreativeRow {
   videoIds: string[];
   roles: CampaignRole[];
   roleLabel: string;
+  /** The ad set this creative was TESTED in — where its learning belongs. */
+  originAdsetId: string | null;
+  originAdsetName: string | null;
+  originSource: OriginSource;
   productLine: string | null;
   isLive: boolean;
   editorName: string | null;
@@ -593,11 +634,161 @@ function computeSummary(rows: BreakdownSource[], pipeline = 0, unlinkedPosted = 
   };
 }
 
+// ─── Creative groups + origins (shared by both views) ────────────────────────
+//
+// A creative = the same video / image / normalised name wherever it was copied
+// (union-find over EVERY ad the account has ever delivered, so an ABO original
+// that stopped spending months ago still groups with its scaling copy today).
+// Each group gets an ORIGIN ad set: the ABO ad set it was tested in. Copies
+// inside CBO scaling containers credit their result back to that origin.
+
+interface OriginInfo {
+  adsetId: string | null;
+  name: string | null;
+  source: OriginSource;
+}
+
+interface CreativeGroups {
+  adsL: Map<string, AdAgg>;
+  adsW: Map<string, AdAgg>;
+  rootOf: Map<string, string>;
+  members: Map<string, string[]>;
+  originOf: Map<string, OriginInfo>;
+  containers: Set<string>;
+  /** adsetId → root ids of the groups that have a member in it */
+  groupsInAdset: Map<string, Set<string>>;
+  adsetName: (id: string) => string;
+  adsetRole: (id: string) => CampaignRole;
+}
+
+const CONTAINER_NAME = /scaling\s*winners|postid|\s-\s*scaling\s*-\s|zombie\s*stack/i;
+
+function buildCreativeGroups(ctx: LoopContext): CreativeGroups {
+  const adsL = adsFromAdsets(ctx.lifetimeAgg);
+  const adsW = adsFromAdsets(ctx.windowAgg);
+  // Window-only ads (no lifetime row is impossible, but be safe).
+  for (const [id, ad] of adsW) if (!adsL.has(id)) adsL.set(id, ad);
+
+  const adsetName = (id: string) => ctx.ownerById.get(id)?.adsetName || ctx.cacheById.get(id)?.name || id;
+  const adsetCampaign = (id: string) => {
+    const cid = ctx.lifetimeAgg.get(id)?.campaignId ?? ctx.ownerById.get(id)?.campaignId ?? ctx.cacheById.get(id)?.campaignId ?? null;
+    return cid ? ctx.campaignById.get(cid)?.name ?? null : null;
+  };
+  const roleCache = new Map<string, CampaignRole>();
+  const adsetRole = (id: string) => {
+    let r = roleCache.get(id);
+    if (!r) { r = campaignRole(adsetCampaign(id), adsetName(id)); roleCache.set(id, r); }
+    return r;
+  };
+
+  // ── union-find ──
+  const parent = new Map<string, string>();
+  const find = (x: string): string => {
+    let r = x;
+    while (parent.get(r) !== r) r = parent.get(r)!;
+    let c = x;
+    while (parent.get(c) !== r) { const n = parent.get(c)!; parent.set(c, r); c = n; }
+    return r;
+  };
+  const union = (a: string, b: string) => { const ra = find(a), rb = find(b); if (ra !== rb) parent.set(ra, rb); };
+  const repByKey = new Map<string, string>();
+  for (const [id, ad] of adsL) {
+    parent.set(id, id);
+    const keys: string[] = [];
+    if (ad.videoId) keys.push(`v:${ad.videoId}`);
+    if (ad.imageHash) keys.push(`i:${ad.imageHash}`);
+    const n = normalizeCreativeName(ad.name);
+    if (n) keys.push(`n:${n}`);
+    for (const k of keys) {
+      const rep = repByKey.get(k);
+      if (rep) union(id, rep); else repByKey.set(k, id);
+    }
+  }
+  const rootOf = new Map<string, string>();
+  const members = new Map<string, string[]>();
+  for (const id of adsL.keys()) {
+    const r = find(id);
+    rootOf.set(id, r);
+    members.set(r, [...(members.get(r) ?? []), id]);
+  }
+
+  // ── name key per ad ("editor|batch") and containers ──
+  const nameKeyOf = new Map<string, string | null>();
+  const keysInAdset = new Map<string, Set<string>>();
+  const groupsInAdset = new Map<string, Set<string>>();
+  for (const [id, ad] of adsL) {
+    const c = parseCandidate(ad.name ?? "", adsetCampaign(ad.adsetId), ctx.knownNames);
+    const key = c.token && c.editorFirst ? `${c.editorFirst}|${c.token.raw.toLowerCase()}` : null;
+    nameKeyOf.set(id, key);
+    if (key) {
+      const set = keysInAdset.get(ad.adsetId) ?? new Set<string>();
+      set.add(key);
+      keysInAdset.set(ad.adsetId, set);
+    }
+    const g = groupsInAdset.get(ad.adsetId) ?? new Set<string>();
+    g.add(rootOf.get(id)!);
+    groupsInAdset.set(ad.adsetId, g);
+  }
+  const containers = new Set<string>();
+  for (const adsetId of groupsInAdset.keys()) {
+    const role = adsetRole(adsetId);
+    const distinct = keysInAdset.get(adsetId)?.size ?? 0;
+    if (CONTAINER_NAME.test(adsetName(adsetId)) || (role !== "testing" && distinct >= 2)) containers.add(adsetId);
+  }
+
+  // Testing-role ad sets indexed by their own name key, for the name fallback.
+  const testingByKey = new Map<string, string[]>();
+  const allAdsetIds = new Set<string>([...ctx.lifetimeAgg.keys(), ...ctx.ownerById.keys(), ...ctx.cacheById.keys()]);
+  for (const adsetId of allAdsetIds) {
+    if (adsetRole(adsetId) !== "testing" || containers.has(adsetId)) continue;
+    const c = parseCandidate(adsetName(adsetId), adsetCampaign(adsetId), ctx.knownNames);
+    if (!c.token || !c.editorFirst) continue;
+    const key = `${c.editorFirst}|${c.token.raw.toLowerCase()}`;
+    testingByKey.set(key, [...(testingByKey.get(key) ?? []), adsetId]);
+  }
+  const firstDateOf = (adsetId: string) => ctx.lifetimeAgg.get(adsetId)?.firstDate ?? "9999";
+
+  // ── origin per group ──
+  const originOf = new Map<string, OriginInfo>();
+  for (const [root, ids] of members) {
+    const sorted = ids.slice().sort((a, b) => (adsL.get(b)?.spend ?? 0) - (adsL.get(a)?.spend ?? 0));
+    const primary = sorted[0];
+    let info: OriginInfo | null = null;
+
+    const manual = ids.map((id) => ctx.adOwnerById.get(id)).find((o) => o?.originAdsetId)?.originAdsetId ?? null;
+    if (manual) info = { adsetId: manual, name: adsetName(manual), source: "manual" };
+
+    const ownAdsets = [...new Set(ids.map((id) => adsL.get(id)!.adsetId))];
+    if (!info) {
+      const testing = ownAdsets.filter((a) => adsetRole(a) === "testing" && !containers.has(a)).sort((a, b) => firstDateOf(a).localeCompare(firstDateOf(b)));
+      if (testing.length) info = { adsetId: testing[0], name: adsetName(testing[0]), source: "testing" };
+    }
+    if (!info) {
+      const key = nameKeyOf.get(primary);
+      const byName = key ? (testingByKey.get(key) ?? []).slice().sort((a, b) => firstDateOf(a).localeCompare(firstDateOf(b))) : [];
+      if (byName.length) info = { adsetId: byName[0], name: adsetName(byName[0]), source: "name" };
+    }
+    if (!info) {
+      const nonContainer = ownAdsets.filter((a) => !containers.has(a)).sort((a, b) => firstDateOf(a).localeCompare(firstDateOf(b)));
+      if (nonContainer.length) info = { adsetId: nonContainer[0], name: adsetName(nonContainer[0]), source: ownAdsets.length > 1 ? "earliest" : "only" };
+    }
+    if (!info) {
+      // Only ever lived inside containers — no test to credit; keep it on itself.
+      const a = adsL.get(primary)!.adsetId;
+      info = { adsetId: a, name: adsetName(a), source: null };
+    }
+    originOf.set(root, info);
+  }
+
+  return { adsL, adsW, rootOf, members, originOf, containers, groupsInAdset, adsetName, adsetRole };
+}
+
 // ─── Ad set view ─────────────────────────────────────────────────────────────
 
 export async function buildLearningLoop(opts: BuildOptions = {}): Promise<LearningLoopData> {
   const ctx = await loadContext(opts);
   const { windowAgg, lifetimeAgg, owners, ownerById, cacheById, campaignById, nameById, assignmentRefs, settings, until, liveCutoff, period } = ctx;
+  const groups = buildCreativeGroups(ctx);
 
   const ids = new Set<string>();
   if (opts.adsetIds) {
@@ -614,6 +805,22 @@ export async function buildLearningLoop(opts: BuildOptions = {}): Promise<Learni
       // spend); verdict/learnings-only rows are lifetime material.
       if (o.assignmentId) ids.add(o.adsetId);
       else if (period === "lifetime" && (o.verdict || o.learnings)) ids.add(o.adsetId);
+    }
+    // An origin ad set whose copies are spending now belongs in the window too.
+    for (const [root, origin] of groups.originOf) {
+      if (!origin.adsetId || ids.has(origin.adsetId)) continue;
+      const copiesActive = (groups.members.get(root) ?? []).some((id) => { const w = groups.adsW.get(id); return !!w && (w.spend > 0 || w.impressions > 0) && w.adsetId !== origin.adsetId; });
+      if (copiesActive && (lifetimeAgg.has(origin.adsetId) || cacheById.has(origin.adsetId))) ids.add(origin.adsetId);
+    }
+  }
+
+  // Copies per origin ad set: every ad of a group that runs OUTSIDE its origin.
+  const copiesByOrigin = new Map<string, string[]>();
+  for (const [root, origin] of groups.originOf) {
+    if (!origin.adsetId || origin.source === null) continue;
+    for (const id of groups.members.get(root) ?? []) {
+      if (groups.adsL.get(id)!.adsetId === origin.adsetId) continue;
+      copiesByOrigin.set(origin.adsetId, [...(copiesByOrigin.get(origin.adsetId) ?? []), id]);
     }
   }
 
@@ -647,14 +854,48 @@ export async function buildLearningLoop(opts: BuildOptions = {}): Promise<Learni
     const isTopSpender = campaignId ? campaignTop.get(campaignId)?.id === id : false;
     const campTotal = campaignId ? campaignSpend.get(campaignId) ?? 0 : 0;
     const spendShare = campTotal > 0 ? window.spend / campTotal : 0;
+    const isContainer = groups.containers.has(id);
     const { classification, recommendation } = classifyAd(
       { spend: window.spend, roas: window.roas, cpa: window.cpa, purchases: window.purchases, ageDays, isTopSpender, spendShare },
       settings,
     );
     const verdict = (owner?.verdict as Verdict | null) ?? null;
-    const { outcome, judged } = outcomeOf(verdict, classification);
+    const judgedInfo = isContainer ? { outcome: "learning" as Outcome, judged: false } : outcomeOf(verdict, classification);
     const role = campaignRole(campaign?.name, name);
     const ncRevenue = ctx.ncMap.get(id)?.newCustomerRevenue ?? 0;
+
+    // Scaling copies credited to this (origin) ad set.
+    const copyIds = copiesByOrigin.get(id) ?? [];
+    const copies: ScaledCopy[] = copyIds.map((adId) => {
+      const lad = groups.adsL.get(adId)!;
+      const wad = groups.adsW.get(adId);
+      const r = groups.adsetRole(lad.adsetId);
+      return {
+        adId, name: lad.name ?? adId, status: lad.status, adsetId: lad.adsetId, adsetName: groups.adsetName(lad.adsetId),
+        role: r, roleLabel: CAMPAIGN_ROLE_LABEL[r], window: toMetrics(wad), lifetime: toMetrics(lad),
+      };
+    }).sort((a, b) => b.window.spend - a.window.spend || b.lifetime.spend - a.lifetime.spend);
+    const scaledWindow = sumMetrics(copies.map((c) => c.window));
+    const scaledLifetime = sumMetrics(copies.map((c) => c.lifetime));
+
+    // For containers: what is inside, and where each creative came from.
+    const containerCreatives: ContainerCreative[] = isContainer
+      ? [...(groups.groupsInAdset.get(id) ?? [])].map((root) => {
+          const memberIds = groups.members.get(root) ?? [];
+          const here = memberIds.filter((m) => groups.adsL.get(m)!.adsetId === id);
+          const primary = here.slice().sort((a, b) => (groups.adsL.get(b)?.spend ?? 0) - (groups.adsL.get(a)?.spend ?? 0))[0];
+          const origin = groups.originOf.get(root)!;
+          const pname = groups.adsL.get(primary)?.name ?? primary;
+          return {
+            key: root, name: pname, hookLabel: hookLabelFromName(pname), adIds: here,
+            originAdsetId: origin.adsetId === id ? null : origin.adsetId,
+            originAdsetName: origin.adsetId === id ? null : origin.name,
+            originSource: origin.adsetId === id ? null : origin.source,
+            window: sumMetrics(here.map((m) => toMetrics(groups.adsW.get(m)))),
+            lifetime: sumMetrics(here.map((m) => toMetrics(groups.adsL.get(m)))),
+          };
+        }).sort((a, b) => b.window.spend - a.window.spend)
+      : [];
 
     rows.push({
       adsetId: id,
@@ -683,7 +924,7 @@ export async function buildLearningLoop(opts: BuildOptions = {}): Promise<Learni
       ageDays,
       ncRoas: window.spend > 0 && ncRevenue > 0 ? ncRevenue / window.spend : null,
       classification,
-      recommendation,
+      recommendation: isContainer ? "Scaling-behållare med creatives från flera briefs — lärdomen bokförs på varje creatives ursprungs-ad set." : recommendation,
       isTopSpender,
       spendShare,
       spendThreshold,
@@ -693,8 +934,8 @@ export async function buildLearningLoop(opts: BuildOptions = {}): Promise<Learni
       learnings: owner?.learnings ?? null,
       learningsAt: owner?.learningsAt ? new Date(owner.learningsAt).toISOString() : null,
       graveyardOutcome: owner?.graveyardOutcome ?? null,
-      outcome,
-      judged,
+      outcome: judgedInfo.outcome,
+      judged: judgedInfo.judged,
       ads: (w?.ads ?? l?.ads ?? []).map((ad) => {
         const r = ratios(ad);
         return {
@@ -703,6 +944,11 @@ export async function buildLearningLoop(opts: BuildOptions = {}): Promise<Learni
           roas: r.roas, cpa: r.cpa, ctr: r.ctr, hookRate: r.hookRate, holdRate: r.holdRate,
         };
       }),
+      isContainer,
+      creativesCount: groups.groupsInAdset.get(id)?.size ?? 0,
+      scaled: { window: scaledWindow, lifetime: scaledLifetime, copies },
+      total: { window: sumMetrics([window, scaledWindow]), lifetime: sumMetrics([lifetime, scaledLifetime]) },
+      containerCreatives,
     });
   }
   rows.sort((a, b) => b.window.spend - a.window.spend || b.lifetime.spend - a.lifetime.spend);
@@ -739,8 +985,10 @@ export async function buildLearningLoop(opts: BuildOptions = {}): Promise<Learni
     })
     .sort((a, b) => (a.status === "posted" ? 0 : 1) - (b.status === "posted" ? 0 : 1) || b.createdAt.localeCompare(a.createdAt));
 
-  const summary = computeSummary(rows, pipeline.length, pipeline.filter((p) => p.status === "posted").length);
-  return { ...envelope(ctx, summary, computeBreakdowns(rows)), rows, pipeline };
+  // Containers are not tests: they never count in hit rate or breakdowns.
+  const tests = rows.filter((r) => !r.isContainer);
+  const summary = computeSummary(tests, pipeline.length, pipeline.filter((p) => p.status === "posted").length);
+  return { ...envelope(ctx, summary, computeBreakdowns(tests)), rows, pipeline };
 }
 
 // ─── Creative view ───────────────────────────────────────────────────────────
@@ -750,76 +998,51 @@ const MAX_CREATIVE_ROWS = 1500;
 export async function buildCreativeLoop(opts: BuildOptions = {}): Promise<CreativeLoopData> {
   const ctx = await loadContext(opts);
   const { ownerById, cacheById, campaignById, nameById, assignmentRefs, adOwnerById, settings, until, liveCutoff, period } = ctx;
-  const adsW = adsFromAdsets(ctx.windowAgg);
-  const adsL = adsFromAdsets(ctx.lifetimeAgg);
+  const groups = buildCreativeGroups(ctx);
+  const { adsL, adsW } = groups;
 
-  // ── Universe of ads ──────────────────────────────────────────────────────
-  const ids = new Set<string>();
+  // ── Which groups to show ─────────────────────────────────────────────────
+  const roots = new Set<string>();
+  const active = (id: string) => { const w = adsW.get(id); return !!w && (w.spend > 0 || w.impressions > 0); };
   if (opts.assignmentId) {
-    for (const [id, ad] of adsL) {
-      const own = adOwnerById.get(id)?.assignmentId;
-      const viaSet = ownerById.get(ad.adsetId)?.assignmentId;
-      if (own === opts.assignmentId || (!own && viaSet === opts.assignmentId)) ids.add(id);
+    for (const [root, ids] of groups.members) {
+      const own = ids.map((id) => adOwnerById.get(id)?.assignmentId).find(Boolean);
+      const origin = groups.originOf.get(root);
+      const viaOrigin = origin?.adsetId ? ownerById.get(origin.adsetId)?.assignmentId : null;
+      const viaAny = ids.map((id) => ownerById.get(adsL.get(id)!.adsetId)?.assignmentId).find(Boolean);
+      if (own === opts.assignmentId || (!own && (viaOrigin === opts.assignmentId || viaAny === opts.assignmentId))) roots.add(root);
     }
   } else {
-    for (const [id, w] of adsW) if (w.spend > 0 || w.impressions > 0) ids.add(id);
-    for (const o of adOwnerById.values()) {
-      if (!adsL.has(o.adId)) continue;
-      if (o.assignmentId) ids.add(o.adId);
-      else if (period === "lifetime" && (o.verdict || o.learnings || o.script)) ids.add(o.adId);
+    for (const [root, ids] of groups.members) {
+      if (ids.some(active)) { roots.add(root); continue; }
+      const o = ids.map((id) => adOwnerById.get(id)).find((x) => x && (x.assignmentId || x.verdict || x.learnings || x.script));
+      if (o && (o.assignmentId || period === "lifetime")) roots.add(root);
     }
   }
-
-  // ── Same creative across ad sets: union by video, image or normalised name ──
-  const parent = new Map<string, string>();
-  const find = (x: string): string => {
-    let r = x;
-    while (parent.get(r) !== r) r = parent.get(r)!;
-    let c = x;
-    while (parent.get(c) !== r) { const n = parent.get(c)!; parent.set(c, r); c = n; }
-    return r;
-  };
-  const union = (a: string, b: string) => { const ra = find(a), rb = find(b); if (ra !== rb) parent.set(ra, rb); };
-  const repByKey = new Map<string, string>();
-  for (const id of ids) {
-    parent.set(id, id);
-    const ad = adsL.get(id) ?? adsW.get(id);
-    if (!ad) continue;
-    const keys: string[] = [];
-    if (ad.videoId) keys.push(`v:${ad.videoId}`);
-    if (ad.imageHash) keys.push(`i:${ad.imageHash}`);
-    const n = normalizeCreativeName(ad.name);
-    if (n) keys.push(`n:${n}`);
-    for (const k of keys) {
-      const rep = repByKey.get(k);
-      if (rep) union(id, rep); else repByKey.set(k, id);
-    }
-  }
-  const groups = new Map<string, string[]>();
-  for (const id of ids) { const r = find(id); groups.set(r, [...(groups.get(r) ?? []), id]); }
 
   const spendThreshold = settings.targetCpa * 3;
   const rows: CreativeRow[] = [];
-  for (const [, adIds] of groups) {
+  for (const root of roots) {
+    const adIds = groups.members.get(root) ?? [];
+    const origin = groups.originOf.get(root)!;
     const ads: CreativeAdRef[] = adIds.map((id) => {
+      const l = adsL.get(id)!;
       const w = adsW.get(id);
-      const l = adsL.get(id) ?? w!;
-      const owner = ownerById.get(l.adsetId);
-      const cached = cacheById.get(l.adsetId);
-      const campaignId = l.campaignId ?? owner?.campaignId ?? cached?.campaignId ?? null;
+      const campaignId = l.campaignId ?? ownerById.get(l.adsetId)?.campaignId ?? cacheById.get(l.adsetId)?.campaignId ?? null;
       const campaign = campaignId ? campaignById.get(campaignId) : undefined;
-      const adsetName = owner?.adsetName || cached?.name || l.adsetId;
-      const role = campaignRole(campaign?.name, adsetName);
+      const role = groups.adsetRole(l.adsetId);
       return {
         adId: id,
         name: l.name ?? id,
         status: l.status,
         adsetId: l.adsetId,
-        adsetName,
+        adsetName: groups.adsetName(l.adsetId),
         campaignId,
         campaignName: campaign?.name ?? null,
         role,
         roleLabel: CAMPAIGN_ROLE_LABEL[role],
+        isContainer: groups.containers.has(l.adsetId),
+        isOrigin: origin.adsetId === l.adsetId,
         window: toMetrics(w),
         lifetime: toMetrics(l),
       };
@@ -833,24 +1056,25 @@ export async function buildCreativeLoop(opts: BuildOptions = {}): Promise<Creati
     const firstOwnerWith = <K extends keyof NonNullable<typeof primaryOwner>>(k: K) =>
       (primaryOwner?.[k] ?? adOwners.find((o) => o[k])?.[k] ?? null) as NonNullable<typeof primaryOwner>[K] | null;
 
-    // Brief: the ad's own link wins; otherwise inherited from any of its ad sets.
+    // Brief: the ad's own link wins; then the ORIGIN ad set's; then any ad set's.
     let assignment: LoopAssignmentRef | null = null;
     let linkSource: CreativeRow["linkSource"] = null;
     const ownLink = firstOwnerWith("assignmentId");
     if (ownLink && assignmentRefs.has(ownLink)) { assignment = assignmentRefs.get(ownLink)!; linkSource = "ad"; }
     else {
-      for (const a of ads) {
-        const via = ownerById.get(a.adsetId)?.assignmentId;
+      const candidates = [origin.adsetId, ...ads.map((a) => a.adsetId)].filter((x): x is string => !!x);
+      for (const adsetId of candidates) {
+        const via = ownerById.get(adsetId)?.assignmentId;
         if (via && assignmentRefs.has(via)) { assignment = assignmentRefs.get(via)!; linkSource = "adset"; break; }
       }
     }
 
-    const primarySetOwner = ownerById.get(primary.adsetId);
+    const originOwner = origin.adsetId ? ownerById.get(origin.adsetId) : undefined;
     const anySetOwner = ads.map((a) => ownerById.get(a.adsetId)).filter((o): o is NonNullable<typeof o> => !!o);
     const parsed = parseAdsetName(stripHookLabel(primary.name), ctx.knownNames);
-    const editorId = firstOwnerWith("videoEditorId") ?? primarySetOwner?.videoEditorId ?? anySetOwner.find((o) => o.videoEditorId)?.videoEditorId ?? null;
-    const strategistId = firstOwnerWith("creativeStrategistId") ?? primarySetOwner?.creativeStrategistId ?? anySetOwner.find((o) => o.creativeStrategistId)?.creativeStrategistId ?? null;
-    const setTag = (k: "format" | "problem" | "angle" | "landing") => primarySetOwner?.[k] ?? anySetOwner.find((o) => o[k])?.[k] ?? null;
+    const editorId = firstOwnerWith("videoEditorId") ?? originOwner?.videoEditorId ?? anySetOwner.find((o) => o.videoEditorId)?.videoEditorId ?? null;
+    const strategistId = firstOwnerWith("creativeStrategistId") ?? originOwner?.creativeStrategistId ?? anySetOwner.find((o) => o.creativeStrategistId)?.creativeStrategistId ?? null;
+    const setTag = (k: "format" | "problem" | "angle" | "landing") => originOwner?.[k] ?? anySetOwner.find((o) => o[k])?.[k] ?? null;
 
     const hookLabel = firstOwnerWith("hookLabel") ?? hookLabelFromName(primary.name);
     const ownScript = firstOwnerWith("script");
@@ -871,7 +1095,7 @@ export async function buildCreativeLoop(opts: BuildOptions = {}): Promise<Creati
     }
 
     rows.push({
-      key: primary.adId,
+      key: root,
       name: primary.name,
       hookLabel,
       primaryAdId: primary.adId,
@@ -880,6 +1104,9 @@ export async function buildCreativeLoop(opts: BuildOptions = {}): Promise<Creati
       videoIds: [...new Set(adIds.map((id) => adsL.get(id)?.videoId).filter((v): v is string => !!v))],
       roles,
       roleLabel: roles.map((r) => CAMPAIGN_ROLE_LABEL[r]).join(" + "),
+      originAdsetId: origin.adsetId,
+      originAdsetName: origin.name,
+      originSource: origin.source,
       productLine: assignment?.productName ?? productLine(primary.campaignName, primary.name),
       isLive: !!window.lastDate && window.lastDate >= liveCutoff,
       editorName: editorId ? nameById.get(editorId) ?? null : assignment?.editorName ?? parsed.editor,

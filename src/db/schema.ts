@@ -496,6 +496,12 @@ export const adOwners = pgTable("ad_owners", {
   linkedAt: timestamp("linked_at"),
   hookLabel: text("hook_label"), // "H2" — which hook variant of the brief's script this ad is
   script: text("script"), // the creative's own script text when it is not (only) the brief's
+  // The ORIGINAL ad set this creative was tested in. A copy inside a CBO
+  // scaling container ("Scaling Winners - POSTID") credits its result to the
+  // ABO ad set it won in, so the loop closes on the test, not the container.
+  // Resolved from names/video ids at read time; this column is the manual override.
+  originAdsetId: text("origin_adset_id"),
+  originSource: text("origin_source"), // "manual" | null
   verdict: text("verdict"), // "confirmed_winner" | "loser" | "iterate" | "inconclusive" | null
   verdictAt: timestamp("verdict_at"),
   learnings: text("learnings"),

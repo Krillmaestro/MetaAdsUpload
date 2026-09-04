@@ -40,7 +40,7 @@ const PERIOD_OPTIONS: { v: Period; l: string }[] = [
 ];
 
 type View = "adsets" | "creatives";
-type SortKey = "name" | "editor" | "product" | "format" | "age" | "spend" | "purchases" | "roas" | "cpa" | "hook" | "class" | "outcome";
+type SortKey = "name" | "editor" | "product" | "format" | "age" | "spend" | "scaled" | "purchases" | "roas" | "cpa" | "hook" | "class" | "outcome";
 const CLASS_ORDER: Record<string, number> = { breakthrough: 0, kpi_winner: 1, spend_winner: 2, new: 3, loser: 4 };
 const OUTCOME_ORDER: Record<string, number> = { winner: 0, judged: 1, learning: 2, loser: 3 };
 
@@ -52,6 +52,7 @@ function sortValue(r: LearningLoopRow, key: SortKey): number | string {
     case "format": return (r.format ?? "").toLowerCase();
     case "age": return r.ageDays;
     case "spend": return r.window.spend;
+    case "scaled": return r.scaled.window.spend;
     case "purchases": return r.window.purchases;
     case "roas": return r.window.roas;
     case "cpa": return r.window.cpa || Number.POSITIVE_INFINITY;
@@ -247,6 +248,7 @@ export default function LearningLoopPage() {
                       <th className="px-2 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-slate-500">LP</th>
                       <Th k="age" className="text-right">Dagar</Th>
                       <Th k="spend" className="text-right">Spend</Th>
+                      <Th k="scaled" className="text-right">+Scaling</Th>
                       <Th k="purchases" className="text-right">Köp</Th>
                       <Th k="roas" className="text-right">ROAS</Th>
                       <Th k="cpa" className="text-right">CPA</Th>
@@ -258,7 +260,7 @@ export default function LearningLoopPage() {
                   </thead>
                   <tbody>
                     {rows.length === 0 ? (
-                      <tr><td colSpan={17} className="px-4 py-10 text-center text-slate-600">Inga ad sets matchar filtren.</td></tr>
+                      <tr><td colSpan={18} className="px-4 py-10 text-center text-slate-600">Inga ad sets matchar filtren.</td></tr>
                     ) : rows.map((r) => {
                       const isOpen = expanded.has(r.adsetId);
                       const cls = CLASSIFICATION_CONFIG[r.classification];
@@ -274,6 +276,7 @@ export default function LearningLoopPage() {
                               </div>
                               <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-slate-500">
                                 <span className={cn("rounded px-1 py-px", role.bg, role.color)}>{r.roleLabel}</span>
+                                {r.isContainer && <span className="rounded bg-white/10 px-1 py-px text-slate-300" title="Scaling-behållare: creatives från flera briefs. Räknas inte som test — lärdomen bokförs på varje creatives ursprungs-ad set.">behållare · {r.creativesCount} creatives</span>}
                                 <span className="truncate" title={r.campaignName ?? ""}>{r.campaignName ?? "—"}</span>
                               </div>
                             </td>
@@ -294,15 +297,30 @@ export default function LearningLoopPage() {
                             <td className="max-w-[100px] truncate px-2 py-2 text-slate-400" title={r.landing ?? ""}>{r.landing ?? <span className="text-slate-600">—</span>}</td>
                             <td className="px-2 py-2 text-right text-slate-400">{r.ageDays || "–"}</td>
                             <td className="px-2 py-2 text-right font-medium text-slate-200">{fmtMoney(r.window.spend, currency)}</td>
+                            <td className="px-2 py-2 text-right">
+                              {r.scaled.copies.length > 0 ? (
+                                <span className="text-violet-300" title={`${r.scaled.copies.length} kopior i scaling/BOF/graveyard · ROAS ${fmtX(r.scaled.window.roas)} · totalt ${fmtMoney(r.total.window.spend, currency)} @ ${fmtX(r.total.window.roas)}`}>
+                                  {fmtMoney(r.scaled.window.spend, currency)}
+                                </span>
+                              ) : <span className="text-slate-700">–</span>}
+                            </td>
                             <td className="px-2 py-2 text-right text-slate-300">{fmtNum(r.window.purchases)}</td>
                             <td className={cn("px-2 py-2 text-right font-semibold", r.window.roas >= data.settings.targetRoas ? "text-emerald-400" : r.window.roas >= data.settings.breakevenRoas ? "text-amber-300" : r.window.roas > 0 ? "text-red-400" : "text-slate-600")}>{fmtX(r.window.roas)}</td>
                             <td className="px-2 py-2 text-right text-slate-300">{r.window.cpa > 0 ? fmtMoney(r.window.cpa, currency) : "–"}</td>
                             <td className="px-2 py-2 text-right text-slate-400">{r.window.hookRate > 0 ? fmtPct(r.window.hookRate, 0) : "–"}</td>
                             <td className="px-2 py-2">
-                              <span className={cn("inline-block rounded px-1.5 py-0.5 text-[10px] font-medium", cls.bg, cls.color)} title={r.recommendation}>{cls.label}</span>
+                              {r.isContainer ? (
+                                <span className="inline-block rounded bg-white/5 px-1.5 py-0.5 text-[10px] font-medium text-slate-400" title={r.recommendation}>Behållare</span>
+                              ) : (
+                                <span className={cn("inline-block rounded px-1.5 py-0.5 text-[10px] font-medium", cls.bg, cls.color)} title={r.recommendation}>{cls.label}</span>
+                              )}
                             </td>
                             <td className="px-2 py-2">
-                              <VerdictSelect adsetId={r.adsetId} adsetName={r.name} campaignId={r.campaignId} value={r.verdict} onChange={(v) => patchRow(r.adsetId, { verdict: v as LearningLoopRow["verdict"], verdictAt: v ? new Date().toISOString() : null })} />
+                              {r.isContainer ? (
+                                <span className="text-[10px] text-slate-600" title="Sätt verdict per creative i Creatives-vyn">per creative</span>
+                              ) : (
+                                <VerdictSelect adsetId={r.adsetId} adsetName={r.name} campaignId={r.campaignId} value={r.verdict} onChange={(v) => patchRow(r.adsetId, { verdict: v as LearningLoopRow["verdict"], verdictAt: v ? new Date().toISOString() : null })} />
+                              )}
                             </td>
                             <td className="px-2 py-2 text-center">
                               <MessageSquareText className={cn("mx-auto h-3.5 w-3.5", r.learnings ? "text-emerald-400" : r.judged ? "text-amber-500/60" : "text-slate-700")} />
@@ -310,7 +328,7 @@ export default function LearningLoopPage() {
                           </tr>
                           {isOpen && (
                             <tr>
-                              <td colSpan={17} className="p-0">
+                              <td colSpan={18} className="p-0">
                                 <RowDetails row={r} currency={currency} accountNumber={accountNumber} targetRoas={targetRoas} periodLabel={periodLabel} onPatch={(p) => patchRow(r.adsetId, p)} onRefresh={() => fetchData(true)} />
                               </td>
                             </tr>
@@ -322,7 +340,7 @@ export default function LearningLoopPage() {
                 </table>
               </div>
               <p className="text-[11px] text-slate-600">
-                Klass = Evolve-klassning på periodens siffror (3× CPA-regeln, mål {data.settings.targetRoas}x, breakeven {data.settings.breakevenRoas}x). Verdict = teamets beslut, väger tyngre än klassen i hit rate. Insights synkas nattligen; &quot;Uppdatera från Meta&quot; hämtar ad set-namn/status och kör auto-kopplingen. Byt till <button type="button" onClick={() => changeView("creatives")} className="text-cyan-400 hover:underline">Creatives</button> för scaling-kampanjer där ett ad set rymmer många briefs.
+                Klass = Evolve-klassning på periodens siffror (3× CPA-regeln, mål {data.settings.targetRoas}x, breakeven {data.settings.breakevenRoas}x). Verdict = teamets beslut, väger tyngre än klassen i hit rate. +Scaling = spend från samma creatives i scaling/BOF/graveyard-set, bokfört på det ad set där de testades; scaling-behållare (&quot;Scaling Winners&quot;) räknas aldrig som test. Insights synkas nattligen; &quot;Uppdatera från Meta&quot; hämtar ad set-namn/status och kör auto-kopplingen. Byt till <button type="button" onClick={() => changeView("creatives")} className="text-cyan-400 hover:underline">Creatives</button> för scaling-kampanjer där ett ad set rymmer många briefs.
               </p>
             </>
           )}
