@@ -81,6 +81,7 @@ export function CreativeDetails({
   periodLabel,
   onPatch,
   onRefresh,
+  onJumpToAdset,
 }: {
   row: CreativeRow;
   currency: string;
@@ -89,6 +90,7 @@ export function CreativeDetails({
   periodLabel: string;
   onPatch: (patch: Partial<CreativeRow>) => void;
   onRefresh: () => void;
+  onJumpToAdset?: (adsetId: string) => void;
 }) {
   const [picker, setPicker] = useState(false);
   const [originPicker, setOriginPicker] = useState(false);
@@ -182,7 +184,13 @@ export function CreativeDetails({
             <div className="min-w-0">
               <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500"><MapPin className="h-3 w-3" /> Ursprungs-ad set</div>
               {row.originAdsetId ? (
-                <div className="truncate text-xs text-slate-200" title={row.originAdsetName ?? row.originAdsetId}>{row.originAdsetName ?? row.originAdsetId}</div>
+                onJumpToAdset ? (
+                  <button type="button" onClick={() => onJumpToAdset(row.originAdsetId!)} className="block max-w-full truncate text-left text-xs text-slate-200 underline decoration-dotted underline-offset-2 hover:text-cyan-300" title={`Gå till ${row.originAdsetName ?? row.originAdsetId} i Ad sets-vyn`}>
+                    {row.originAdsetName ?? row.originAdsetId}
+                  </button>
+                ) : (
+                  <div className="truncate text-xs text-slate-200" title={row.originAdsetName ?? row.originAdsetId}>{row.originAdsetName ?? row.originAdsetId}</div>
+                )
               ) : (
                 <div className="text-xs italic text-slate-500">Bara i behållare — inget testset hittat</div>
               )}

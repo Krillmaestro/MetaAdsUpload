@@ -34,6 +34,7 @@ export function RowDetails({
   periodLabel,
   onPatch,
   onRefresh,
+  onJumpToAdset,
 }: {
   row: LearningLoopRow;
   currency: string;
@@ -43,6 +44,8 @@ export function RowDetails({
   onPatch: (patch: Partial<LearningLoopRow>) => void;
   /** Re-fetch after a link change (the brief reference comes from the server). */
   onRefresh: () => void;
+  /** Expand + scroll to another ad set row (origin of a creative in a container). */
+  onJumpToAdset?: (adsetId: string) => void;
 }) {
   const [picker, setPicker] = useState(false);
   const [unlinking, setUnlinking] = useState(false);
@@ -130,10 +133,23 @@ export function RowDetails({
 
       {/* ── Numbers ── */}
       <div className="space-y-2">
-        <h4 className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Resultat · {periodLabel}</h4>
+        <h4 className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+          Resultat · {periodLabel}{row.scaled.copies.length > 0 && <span className="ml-1 normal-case text-violet-300/80">· inkl. scaling-kopior</span>}
+        </h4>
+        {row.creditedAway.adsets.length > 0 && (
+          <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[11px] text-amber-200/90">
+            {fmtMoney(row.creditedAway.window.spend, currency)} som gick här bokförs på ursprunget:{" "}
+            {row.creditedAway.adsets.map((a, i) => (
+              <span key={a.adsetId}>
+                {i > 0 && ", "}
+                {onJumpToAdset ? <button type="button" onClick={() => onJumpToAdset(a.adsetId)} className="underline decoration-dotted hover:text-white">{a.name}</button> : a.name}
+              </span>
+            ))}
+          </div>
+        )}
         <div className="grid grid-cols-3 gap-1.5">
-          <Stat label="Spend" value={fmtMoney(row.window.spend, currency)} sub={`lifetime ${fmtMoney(row.lifetime.spend, currency)}`} />
-          <Stat label="ROAS" value={fmtX(row.window.roas)} sub={`lifetime ${fmtX(row.lifetime.roas)}`} accent={row.window.roas >= targetRoas ? "text-emerald-400" : row.window.roas > 0 ? "text-amber-300" : undefined} />
+          <Stat label="Spend" value={fmtMoney(row.window.spend, currency)} sub={row.scaled.copies.length > 0 ? `eget ${fmtMoney(row.own.window.spend, currency)} · scaling ${fmtMoney(row.scaled.window.spend, currency)}` : `lifetime ${fmtMoney(row.lifetime.spend, currency)}`} />
+          <Stat label="ROAS" value={fmtX(row.window.roas)} sub={row.scaled.copies.length > 0 ? `eget ${fmtX(row.own.window.roas)} · scaling ${fmtX(row.scaled.window.roas)}` : `lifetime ${fmtX(row.lifetime.roas)}`} accent={row.window.roas >= targetRoas ? "text-emerald-400" : row.window.roas > 0 ? "text-amber-300" : undefined} />
           <Stat label="CPA" value={row.window.cpa > 0 ? fmtMoney(row.window.cpa, currency) : "–"} sub={`${fmtNum(row.window.purchases)} köp`} />
           <Stat label="Hook rate" value={fmtPct(row.window.hookRate)} sub="3s / impressions" />
           <Stat label="Hold rate" value={fmtPct(row.window.holdRate)} sub="thruplay / 3s" />
@@ -160,9 +176,9 @@ export function RowDetails({
               <span className="text-[10px] text-slate-500">bokförs på det här ad setet</span>
             </div>
             <div className="grid grid-cols-3 gap-1.5">
-              <Stat label="Scaling-spend" value={fmtMoney(row.scaled.window.spend, currency)} sub={`lifetime ${fmtMoney(row.scaled.lifetime.spend, currency)}`} />
-              <Stat label="Scaling-ROAS" value={fmtX(row.scaled.window.roas)} sub={`lifetime ${fmtX(row.scaled.lifetime.roas)}`} accent={row.scaled.window.roas >= targetRoas ? "text-emerald-400" : row.scaled.window.roas > 0 ? "text-amber-300" : undefined} />
-              <Stat label="Totalt inkl. scaling" value={fmtMoney(row.total.window.spend, currency)} sub={`ROAS ${fmtX(row.total.window.roas)} · lifetime ${fmtMoney(row.total.lifetime.spend, currency)} @ ${fmtX(row.total.lifetime.roas)}`} accent={row.total.window.roas >= targetRoas ? "text-emerald-400" : undefined} />
+              <Stat label="Eget (i det här ad setet)" value={fmtMoney(row.own.window.spend, currency)} sub={`ROAS ${fmtX(row.own.window.roas)} · lifetime ${fmtMoney(row.own.lifetime.spend, currency)}`} />
+              <Stat label="Scaling-kopior" value={fmtMoney(row.scaled.window.spend, currency)} sub={`ROAS ${fmtX(row.scaled.window.roas)} · lifetime ${fmtMoney(row.scaled.lifetime.spend, currency)}`} accent={row.scaled.window.roas >= targetRoas ? "text-emerald-400" : row.scaled.window.roas > 0 ? "text-amber-300" : undefined} />
+              <Stat label="Totalt (raden)" value={fmtMoney(row.window.spend, currency)} sub={`ROAS ${fmtX(row.window.roas)} · lifetime ${fmtMoney(row.lifetime.spend, currency)} @ ${fmtX(row.lifetime.roas)}`} accent={row.window.roas >= targetRoas ? "text-emerald-400" : undefined} />
             </div>
             <table className="w-full text-[11px]">
               <tbody>
@@ -193,7 +209,7 @@ export function RowDetails({
         {/* ── Container: what is inside and where each creative belongs ── */}
         {row.isContainer && row.containerCreatives.length > 0 && (
           <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3 space-y-2">
-            <h4 className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400"><MapPin className="h-3.5 w-3.5" /> {row.containerCreatives.length} creatives i behållaren · ursprung per creative</h4>
+            <h4 className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400"><MapPin className="h-3.5 w-3.5" /> {row.containerCreatives.length} creatives i behållaren · klicka på ursprunget för att göra learning där</h4>
             <table className="w-full text-[11px]">
               <thead className="text-[10px] uppercase tracking-wider text-slate-500">
                 <tr>
@@ -211,8 +227,14 @@ export function RowDetails({
                       {c.name}
                     </td>
                     <td className="max-w-[260px] truncate px-1 py-1" title={c.originAdsetName ?? ""}>
-                      {c.originAdsetName ? (
-                        <span className={cn(c.originSource === "manual" ? "text-cyan-300" : "text-slate-300")}>↳ {c.originAdsetName}</span>
+                      {c.originAdsetName && c.originAdsetId ? (
+                        onJumpToAdset ? (
+                          <button type="button" onClick={() => onJumpToAdset(c.originAdsetId!)} className={cn("truncate underline decoration-dotted underline-offset-2 hover:text-white", c.originSource === "manual" ? "text-cyan-300" : "text-slate-300")} title={`Gå till ${c.originAdsetName}`}>
+                            ↳ {c.originAdsetName}
+                          </button>
+                        ) : (
+                          <span className={cn(c.originSource === "manual" ? "text-cyan-300" : "text-slate-300")}>↳ {c.originAdsetName}</span>
+                        )
                       ) : (
                         <span className="text-amber-500/80">saknas — välj i Creatives-vyn</span>
                       )}

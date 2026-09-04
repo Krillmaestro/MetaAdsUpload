@@ -38,7 +38,7 @@ function sortValue(r: CreativeRow, key: SortKey): number | string {
  * the view for CBO scaling campaigns, where one ad set holds winners from many
  * briefs and the ad set itself says nothing about which brief worked.
  */
-export function CreativesView({ account, period, periodLabel }: { account: string; period: Period; periodLabel: string }) {
+export function CreativesView({ account, period, periodLabel, onJumpToAdset }: { account: string; period: Period; periodLabel: string; onJumpToAdset?: (adsetId: string) => void }) {
   const [data, setData] = useState<CreativeLoopData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -171,9 +171,9 @@ export function CreativesView({ account, period, periodLabel }: { account: strin
                       <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-slate-500">
                         <span className="shrink-0">{r.ads.length} annons{r.ads.length === 1 ? "" : "er"} · {r.adsetIds.length} ad set</span>
                         {r.originAdsetName ? (
-                          <span className="truncate" title={`Ursprung: ${r.originAdsetName}`}>
+                          <button type="button" onClick={(e) => { e.stopPropagation(); onJumpToAdset?.(r.originAdsetId!); }} className="truncate text-left hover:text-cyan-300" title={`Ursprung: ${r.originAdsetName} — klicka för att gå dit`}>
                             <span className={cn(r.originSource === "manual" ? "text-cyan-400" : "text-slate-500")}>↳</span> {r.originAdsetName}
-                          </span>
+                          </button>
                         ) : (
                           <span className="truncate text-amber-500/70" title="Ligger bara i scaling-behållare — välj ursprungs-ad set i raden">ursprung saknas</span>
                         )}
@@ -218,7 +218,7 @@ export function CreativesView({ account, period, periodLabel }: { account: strin
                   {isOpen && (
                     <tr>
                       <td colSpan={18} className="p-0">
-                        <CreativeDetails row={r} currency={currency} accountNumber={accountNumber} targetRoas={targetRoas} periodLabel={periodLabel} onPatch={(p) => patchRow(r.key, p)} onRefresh={() => fetchData(true)} />
+                        <CreativeDetails row={r} currency={currency} accountNumber={accountNumber} targetRoas={targetRoas} periodLabel={periodLabel} onPatch={(p) => patchRow(r.key, p)} onRefresh={() => fetchData(true)} onJumpToAdset={onJumpToAdset} />
                       </td>
                     </tr>
                   )}

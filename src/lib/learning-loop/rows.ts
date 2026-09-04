@@ -154,10 +154,16 @@ export interface LearningLoopRow {
   /** A CBO scaling container ("Scaling Winners - POSTID") — many briefs, never a test itself. */
   isContainer: boolean;
   creativesCount: number;
+  /**
+   * `window` / `lifetime` above are the CREDITED numbers: this ad set's own
+   * creatives (wherever they run) — own ads not credited elsewhere + copies
+   * in scaling/BOF/graveyard. `own` is what ran in this ad set itself.
+   */
+  own: { window: LoopMetrics; lifetime: LoopMetrics };
   /** Copies of THIS ad set's creatives running elsewhere (scaling, BOF, graveyard). */
   scaled: { window: LoopMetrics; lifetime: LoopMetrics; copies: ScaledCopy[] };
-  /** Own + scaled. */
-  total: { window: LoopMetrics; lifetime: LoopMetrics };
+  /** Ads that ran HERE but are credited to another (origin) ad set. */
+  creditedAway: { window: LoopMetrics; adsets: Array<{ adsetId: string; name: string }> };
   /** For containers: what is inside and where each creative came from. */
   containerCreatives: ContainerCreative[];
 }
@@ -409,6 +415,10 @@ interface LoopContext {
   assignmentsForMatch: AssignmentForMatch[];
   ncMap: Map<string, { newCustomerRevenue: number }>;
   adOwnerById: Map<string, typeof schema.adOwners.$inferSelect>;
+  /** adset id → ad account, from ads_cache (covers ad sets with no insights yet). */
+  adsetAccount: Map<string, string | null>;
+  /** True when the ad set is known to belong to the selected account (or no account filter). */
+  inAccount: (adsetId: string) => boolean;
 }
 
 type AssignmentRowRaw = {
@@ -437,7 +447,7 @@ async function loadContext(opts: BuildOptions): Promise<LoopContext> {
   const currency = wantAll ? "" : accounts.find((a) => a.id === accountId)?.currency ?? "SEK";
   const aggOpts = accountId ? { accountIds: [accountId], includeLegacyNull: accountId === activeId } : {};
 
-  const [settings, windowAgg, lifetimeAgg, owners, cache, campaigns, users, assignmentRows, ncMap, adOwners, assignmentsForMatch] = await Promise.all([
+  const [settings, windowAgg, lifetimeAgg, owners, cache, campaigns, users, assignmentRows, ncMap, adOwners, assignmentsForMatch, adsetAccounts] = await Promise.all([
     getEvolveSettings(),
     aggregateInsightsByAdset({ since, until, ...aggOpts }),
     aggregateInsightsByAdset(aggOpts),
@@ -482,7 +492,19 @@ async function loadContext(opts: BuildOptions): Promise<LoopContext> {
     getAdsetNcRoas(since ?? "2020-01-01", until).catch(() => new Map<string, { newCustomerRevenue: number }>()),
     db.select().from(schema.adOwners),
     loadAssignmentsForMatch(),
+    db.selectDistinct({ adsetId: schema.adsCache.adsetId, adAccountId: schema.adsCache.adAccountId }).from(schema.adsCache),
   ]);
+
+  const adsetAccount = new Map<string, string | null>();
+  for (const r of adsetAccounts) if (!adsetAccount.has(r.adsetId) || r.adAccountId) adsetAccount.set(r.adsetId, r.adAccountId ? formatAct(r.adAccountId) : null);
+  const inAccount = (adsetId: string) => {
+    if (!accountId) return true;
+    if (windowAgg.has(adsetId) || lifetimeAgg.has(adsetId)) return true;
+    const acct = adsetAccount.get(adsetId);
+    if (acct) return acct === accountId;
+    // Unknown (legacy null / not in ads_cache): treat as the active account's.
+    return accountId === activeId;
+  };
 
   const nameById = new Map(users.map((u) => [u.id, u.name]));
   const assignmentRefs = new Map<string, LoopAssignmentRef>();
@@ -519,6 +541,7 @@ async function loadContext(opts: BuildOptions): Promise<LoopContext> {
     nameById, knownNames: [...new Set(users.map((u) => u.name))],
     assignmentRows: assignmentRows as AssignmentRowRaw[], assignmentRefs, assignmentsForMatch,
     ncMap, adOwnerById: new Map(adOwners.map((o) => [o.adId, o])),
+    adsetAccount, inAccount,
   };
 }
 
@@ -740,6 +763,7 @@ function buildCreativeGroups(ctx: LoopContext): CreativeGroups {
   const testingByKey = new Map<string, string[]>();
   const allAdsetIds = new Set<string>([...ctx.lifetimeAgg.keys(), ...ctx.ownerById.keys(), ...ctx.cacheById.keys()]);
   for (const adsetId of allAdsetIds) {
+    if (!ctx.inAccount(adsetId)) continue;
     if (adsetRole(adsetId) !== "testing" || containers.has(adsetId)) continue;
     const c = parseCandidate(adsetName(adsetId), adsetCampaign(adsetId), ctx.knownNames);
     if (!c.token || !c.editorFirst) continue;
@@ -810,7 +834,9 @@ export async function buildLearningLoop(opts: BuildOptions = {}): Promise<Learni
     for (const [root, origin] of groups.originOf) {
       if (!origin.adsetId || ids.has(origin.adsetId)) continue;
       const copiesActive = (groups.members.get(root) ?? []).some((id) => { const w = groups.adsW.get(id); return !!w && (w.spend > 0 || w.impressions > 0) && w.adsetId !== origin.adsetId; });
-      if (copiesActive && (lifetimeAgg.has(origin.adsetId) || cacheById.has(origin.adsetId))) ids.add(origin.adsetId);
+      // The origin may have no insights of its own yet (backfill pending) — it
+      // still gets a row, carrying its copies' numbers.
+      if (copiesActive && ctx.inAccount(origin.adsetId)) ids.add(origin.adsetId);
     }
   }
 
@@ -836,6 +862,13 @@ export async function buildLearningLoop(opts: BuildOptions = {}): Promise<Learni
     if (!top || w.spend > top.spend) campaignTop.set(cid, { id, spend: w.spend });
   }
 
+  // Where an ad's result is booked: its group's origin ad set (null = stays where it ran).
+  const creditedTo = (adId: string): string | null => {
+    const root = groups.rootOf.get(adId);
+    const o = root ? groups.originOf.get(root) : undefined;
+    return o && o.source !== null ? o.adsetId : null;
+  };
+
   const spendThreshold = settings.targetCpa * 3;
   const rows: LearningLoopRow[] = [];
   for (const id of ids) {
@@ -847,22 +880,18 @@ export async function buildLearningLoop(opts: BuildOptions = {}): Promise<Learni
     const campaign = campaignId ? campaignById.get(campaignId) : undefined;
     const name = owner?.adsetName || cached?.name || id;
     const assignment = owner?.assignmentId ? assignmentRefs.get(owner.assignmentId) ?? null : null;
-    const window = toMetrics(w);
-    const lifetime = toMetrics(l);
-    const firstEver = lifetime.firstDate ?? (cached?.createdTime ? isoDate(new Date(cached.createdTime)) : null);
-    const ageDays = daysBetween(firstEver, until);
-    const isTopSpender = campaignId ? campaignTop.get(campaignId)?.id === id : false;
-    const campTotal = campaignId ? campaignSpend.get(campaignId) ?? 0 : 0;
-    const spendShare = campTotal > 0 ? window.spend / campTotal : 0;
     const isContainer = groups.containers.has(id);
-    const { classification, recommendation } = classifyAd(
-      { spend: window.spend, roas: window.roas, cpa: window.cpa, purchases: window.purchases, ageDays, isTopSpender, spendShare },
-      settings,
-    );
-    const verdict = (owner?.verdict as Verdict | null) ?? null;
-    const judgedInfo = isContainer ? { outcome: "learning" as Outcome, judged: false } : outcomeOf(verdict, classification);
-    const role = campaignRole(campaign?.name, name);
-    const ncRevenue = ctx.ncMap.get(id)?.newCustomerRevenue ?? 0;
+
+    // Own = ads that ran here and are NOT booked on another origin.
+    const stays = (ad: AdAgg) => { const to = creditedTo(ad.adId); return !to || to === id; };
+    const ownWindowAds = (w?.ads ?? []).filter(stays);
+    const ownLifetimeAds = (l?.ads ?? []).filter(stays);
+    const own = { window: sumMetrics(ownWindowAds.map((ad) => toMetrics(ad))), lifetime: sumMetrics(ownLifetimeAds.map((ad) => toMetrics(ad))) };
+    const awayAds = (w?.ads ?? []).filter((ad) => !stays(ad));
+    const creditedAway = {
+      window: sumMetrics(awayAds.map((ad) => toMetrics(ad))),
+      adsets: [...new Set(awayAds.map((ad) => creditedTo(ad.adId)!))].map((a) => ({ adsetId: a, name: groups.adsetName(a) })),
+    };
 
     // Scaling copies credited to this (origin) ad set.
     const copyIds = copiesByOrigin.get(id) ?? [];
@@ -877,6 +906,31 @@ export async function buildLearningLoop(opts: BuildOptions = {}): Promise<Learni
     }).sort((a, b) => b.window.spend - a.window.spend || b.lifetime.spend - a.lifetime.spend);
     const scaledWindow = sumMetrics(copies.map((c) => c.window));
     const scaledLifetime = sumMetrics(copies.map((c) => c.lifetime));
+
+    // Credited numbers = own + copies. Everything below (class, verdict, hit rate) reads these.
+    const window = sumMetrics([own.window, scaledWindow]);
+    const lifetime = sumMetrics([own.lifetime, scaledLifetime]);
+
+    // A pure copy set (everything it ran is booked elsewhere) is noise here —
+    // its result shows on the origin row — unless a person tagged it.
+    if (!opts.adsetIds && !isContainer) {
+      const empty = (m: LoopMetrics) => m.spend === 0 && m.impressions === 0;
+      if (empty(window) && !owner?.assignmentId && !owner?.verdict && !owner?.learnings) continue;
+    }
+
+    const firstEver = lifetime.firstDate ?? (cached?.createdTime ? isoDate(new Date(cached.createdTime)) : null);
+    const ageDays = daysBetween(firstEver, until);
+    const isTopSpender = campaignId ? campaignTop.get(campaignId)?.id === id : false;
+    const campTotal = campaignId ? campaignSpend.get(campaignId) ?? 0 : 0;
+    const spendShare = campTotal > 0 ? own.window.spend / campTotal : 0;
+    const { classification, recommendation } = classifyAd(
+      { spend: window.spend, roas: window.roas, cpa: window.cpa, purchases: window.purchases, ageDays, isTopSpender, spendShare },
+      settings,
+    );
+    const verdict = (owner?.verdict as Verdict | null) ?? null;
+    const judgedInfo = isContainer ? { outcome: "learning" as Outcome, judged: false } : outcomeOf(verdict, classification);
+    const role = campaignRole(campaign?.name, name);
+    const ncRevenue = ctx.ncMap.get(id)?.newCustomerRevenue ?? 0;
 
     // For containers: what is inside, and where each creative came from.
     const containerCreatives: ContainerCreative[] = isContainer
@@ -936,7 +990,7 @@ export async function buildLearningLoop(opts: BuildOptions = {}): Promise<Learni
       graveyardOutcome: owner?.graveyardOutcome ?? null,
       outcome: judgedInfo.outcome,
       judged: judgedInfo.judged,
-      ads: (w?.ads ?? l?.ads ?? []).map((ad) => {
+      ads: (ownWindowAds.length ? ownWindowAds : ownLifetimeAds).map((ad) => {
         const r = ratios(ad);
         return {
           id: ad.adId, name: ad.name ?? ad.adId, status: ad.status,
@@ -946,8 +1000,9 @@ export async function buildLearningLoop(opts: BuildOptions = {}): Promise<Learni
       }),
       isContainer,
       creativesCount: groups.groupsInAdset.get(id)?.size ?? 0,
+      own,
       scaled: { window: scaledWindow, lifetime: scaledLifetime, copies },
-      total: { window: sumMetrics([window, scaledWindow]), lifetime: sumMetrics([lifetime, scaledLifetime]) },
+      creditedAway,
       containerCreatives,
     });
   }

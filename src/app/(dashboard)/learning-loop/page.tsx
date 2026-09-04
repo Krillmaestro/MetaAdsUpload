@@ -78,8 +78,36 @@ export default function LearningLoopPage() {
   const [sort, setSort] = useState<{ key: SortKey; dir: "asc" | "desc" }>({ key: "spend", dir: "desc" });
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
-  useEffect(() => { setView(readStoredView()); }, []);
+  const [jumpTarget, setJumpTarget] = useState<string | null>(null);
+
+  useEffect(() => {
+    // ?adset=<id> (from the assignment card) opens straight onto that row.
+    let fromUrl: string | null = null;
+    try { fromUrl = new URLSearchParams(window.location.search).get("adset"); } catch { /* ignore */ }
+    if (fromUrl) { setView("adsets"); setExpanded(new Set([fromUrl])); setJumpTarget(fromUrl); }
+    else setView(readStoredView());
+  }, []);
   const changeView = (v: View) => { setView(v); try { localStorage.setItem("learning-loop-view", v); } catch { /* ignore */ } };
+
+  /** Expand + scroll to an ad set row — from a container's creative list or the Creatives view. */
+  const jumpToAdset = (adsetId: string) => {
+    changeView("adsets");
+    setFilters(EMPTY_FILTERS);
+    setExpanded((s) => new Set(s).add(adsetId));
+    setJumpTarget(adsetId);
+  };
+  useEffect(() => {
+    if (!jumpTarget || !data || view !== "adsets") return;
+    const t = setTimeout(() => {
+      const el = document.getElementById(`adset-row-${jumpTarget}`);
+      if (!el) { toast.info("Ad setet finns inte i den här perioden — prova Lifetime."); setJumpTarget(null); return; }
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+      el.classList.add("ring-1", "ring-cyan-400/60");
+      setTimeout(() => el.classList.remove("ring-1", "ring-cyan-400/60"), 2500);
+      setJumpTarget(null);
+    }, 150);
+    return () => clearTimeout(t);
+  }, [jumpTarget, data, view]);
 
   const fetchData = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
@@ -212,7 +240,7 @@ export default function LearningLoopPage() {
           {view === "creatives" ? (
             <>
               <Pipeline pipeline={data.pipeline} onChanged={() => fetchData(true)} />
-              <CreativesView key={`${effectiveAccount}|${period}`} account={effectiveAccount} period={period} periodLabel={periodLabel} />
+              <CreativesView key={`${effectiveAccount}|${period}`} account={effectiveAccount} period={period} periodLabel={periodLabel} onJumpToAdset={jumpToAdset} />
             </>
           ) : (
             <>
@@ -267,7 +295,7 @@ export default function LearningLoopPage() {
                       const role = ROLE_CONFIG[r.role];
                       return (
                         <Fragment key={r.adsetId}>
-                          <tr onClick={() => toggleExpand(r.adsetId)} className={cn("cursor-pointer border-b border-white/[0.04] hover:bg-white/[0.02]", isOpen && "bg-white/[0.02]")}>
+                          <tr id={`adset-row-${r.adsetId}`} onClick={() => toggleExpand(r.adsetId)} className={cn("cursor-pointer border-b border-white/[0.04] transition-shadow hover:bg-white/[0.02]", isOpen && "bg-white/[0.02]")}>
                             <td className="px-2 text-slate-500">{isOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}</td>
                             <td className="max-w-[340px] px-2 py-2">
                               <div className="flex items-center gap-1.5">
@@ -299,7 +327,7 @@ export default function LearningLoopPage() {
                             <td className="px-2 py-2 text-right font-medium text-slate-200">{fmtMoney(r.window.spend, currency)}</td>
                             <td className="px-2 py-2 text-right">
                               {r.scaled.copies.length > 0 ? (
-                                <span className="text-violet-300" title={`${r.scaled.copies.length} kopior i scaling/BOF/graveyard · ROAS ${fmtX(r.scaled.window.roas)} · totalt ${fmtMoney(r.total.window.spend, currency)} @ ${fmtX(r.total.window.roas)}`}>
+                                <span className="text-violet-300" title={`Ingår i Spend: ${r.scaled.copies.length} kopior i scaling/BOF/graveyard · scaling-ROAS ${fmtX(r.scaled.window.roas)} · eget ${fmtMoney(r.own.window.spend, currency)} @ ${fmtX(r.own.window.roas)}`}>
                                   {fmtMoney(r.scaled.window.spend, currency)}
                                 </span>
                               ) : <span className="text-slate-700">–</span>}
@@ -329,7 +357,7 @@ export default function LearningLoopPage() {
                           {isOpen && (
                             <tr>
                               <td colSpan={18} className="p-0">
-                                <RowDetails row={r} currency={currency} accountNumber={accountNumber} targetRoas={targetRoas} periodLabel={periodLabel} onPatch={(p) => patchRow(r.adsetId, p)} onRefresh={() => fetchData(true)} />
+                                <RowDetails row={r} currency={currency} accountNumber={accountNumber} targetRoas={targetRoas} periodLabel={periodLabel} onPatch={(p) => patchRow(r.adsetId, p)} onRefresh={() => fetchData(true)} onJumpToAdset={jumpToAdset} />
                               </td>
                             </tr>
                           )}
@@ -340,7 +368,7 @@ export default function LearningLoopPage() {
                 </table>
               </div>
               <p className="text-[11px] text-slate-600">
-                Klass = Evolve-klassning på periodens siffror (3× CPA-regeln, mål {data.settings.targetRoas}x, breakeven {data.settings.breakevenRoas}x). Verdict = teamets beslut, väger tyngre än klassen i hit rate. +Scaling = spend från samma creatives i scaling/BOF/graveyard-set, bokfört på det ad set där de testades; scaling-behållare (&quot;Scaling Winners&quot;) räknas aldrig som test. Insights synkas nattligen; &quot;Uppdatera från Meta&quot; hämtar ad set-namn/status och kör auto-kopplingen. Byt till <button type="button" onClick={() => changeView("creatives")} className="text-cyan-400 hover:underline">Creatives</button> för scaling-kampanjer där ett ad set rymmer många briefs.
+                Klass = Evolve-klassning på periodens siffror (3× CPA-regeln, mål {data.settings.targetRoas}x, breakeven {data.settings.breakevenRoas}x). Verdict = teamets beslut, väger tyngre än klassen i hit rate. Spend, ROAS och klass på en rad inkluderar radens creatives var de än kör — +Scaling visar hur mycket som kommer från scaling/BOF/graveyard-kopior. Scaling-behållare (&quot;Scaling Winners&quot;) räknas aldrig som test; klicka på ursprunget i behållaren för att göra learning där. Insights synkas nattligen; &quot;Uppdatera från Meta&quot; hämtar ad set-namn/status och kör auto-kopplingen. Byt till <button type="button" onClick={() => changeView("creatives")} className="text-cyan-400 hover:underline">Creatives</button> för scaling-kampanjer där ett ad set rymmer många briefs.
               </p>
             </>
           )}

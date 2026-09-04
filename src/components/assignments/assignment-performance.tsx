@@ -128,10 +128,10 @@ export function AssignmentPerformance({ assignmentId, assignmentName, isAdmin, i
                     return (
                       <tr key={r.adsetId} className="border-t border-white/[0.04]">
                         <td className="max-w-[260px] px-2 py-1.5">
-                          <div className="truncate text-slate-200" title={r.name}>
+                          <Link href={`/learning-loop?adset=${r.adsetId}`} className="block truncate text-slate-200 hover:text-cyan-300" title={`${r.name} — öppna i Learning Loop`}>
                             <span className={cn("mr-1.5 inline-block h-1.5 w-1.5 rounded-full", r.isLive ? "bg-emerald-400" : "bg-slate-600")} />
                             {r.name}
-                          </div>
+                          </Link>
                           <div className="truncate text-[10px] text-slate-500">{r.roleLabel} · {r.campaignName ?? "—"} · {r.ageDays} dagar</div>
                         </td>
                         <td className="px-2 py-1.5 text-right text-slate-200">{fmtMoney(r.window.spend, currency)}</td>
