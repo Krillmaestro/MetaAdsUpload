@@ -163,3 +163,26 @@ export function scriptTextFor(
   if (script.body.se || script.body.eng) parts.push(script.body.se || script.body.eng);
   return parts.length ? parts.join("\n\n") : null;
 }
+
+/**
+ * Loose identity for matching an AD to the FILE it was made from. File names
+ * are written before launch ("… - TBD - …"), ad names after (with the landing
+ * page filled in), so only the parts that never change are compared: hook,
+ * editor, batch token and format. Two ads of the same hook/batch/format are
+ * the same video with different links.
+ */
+export function looseMediaKey(nameOrFilename: string | null | undefined): string | null {
+  if (!nameOrFilename) return null;
+  const t = nameOrFilename
+    .replace(/^\d{10,}-/, "")
+    .replace(/\.(mp4|mov|webm|jpg|jpeg|png|webp)$/i, "")
+    .replace(/_/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const hook = t.match(/^(H\d+)\b/i)?.[1]?.toUpperCase() ?? "";
+  const batch = t.match(/\b(jan|feb|mar|apr|maj|may|jun|jul|aug|sep|okt|oct|nov|dec)\d+(?:\.\d+)?(?:\.?v\d+)?/i)?.[0]?.toLowerCase() ?? "";
+  if (!batch) return null;
+  const editor = t.match(/\b(SE|USA|US|UK|AU)\s+([A-Za-zÅÄÖåäö]+)/)?.[2]?.toLowerCase() ?? t.split(" ")[1]?.toLowerCase() ?? "";
+  const fmt = t.match(/\b(VSL|UGC|STATIC|ANIME|Non narrated|NON_NARRATED)\b/i)?.[1]?.toLowerCase().replace("_", " ") ?? "";
+  return `${hook}|${editor}|${batch}|${fmt}`;
+}

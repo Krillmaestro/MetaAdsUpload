@@ -298,6 +298,12 @@ export const creatives = pgTable("creatives", {
   editorName: text("editor_name"),
   batchNumber: text("batch_number"),
   status: text("status").default("uploaded"), // uploaded | in_review | approved | archived
+  // Web preview of the master (720p H.264 faststart, made by the nightly
+  // transcode job). The masters themselves are 50–600 MB with the index at
+  // the end, which a browser cannot stream — this is what plays in the app.
+  previewUrl: text("preview_url"),
+  previewAt: timestamp("preview_at"),
+  previewError: text("preview_error"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

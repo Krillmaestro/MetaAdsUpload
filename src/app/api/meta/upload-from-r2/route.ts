@@ -324,7 +324,20 @@ export async function POST(request: NextRequest) {
       if (imageHash) linkUpdates.metaImageHash = imageHash;
       if (results.thumbnailUrl) linkUpdates.thumbnailUrl = results.thumbnailUrl;
       if (Object.keys(linkUpdates).length > 0) {
-        await db.update(schema.creatives).set(linkUpdates).where(eq(schema.creatives.r2Key, r2Key));
+        const linked = await db.update(schema.creatives).set(linkUpdates).where(eq(schema.creatives.r2Key, r2Key)).returning({ id: schema.creatives.id });
+        // A deliverable (editor upload) has no library row yet — create one so
+        // the Learning Loop can play the original file for this ad.
+        if (linked.length === 0) {
+          await db.insert(schema.creatives).values({
+            name: filename,
+            type: mediaType === "image" ? "image" : "video",
+            source: "r2",
+            r2Key,
+            r2Url,
+            status: "uploaded",
+            ...linkUpdates,
+          });
+        }
       }
     } catch (e) {
       console.error("Library creative link failed (non-fatal):", e);
