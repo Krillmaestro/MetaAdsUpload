@@ -6,6 +6,7 @@
 
 import { useEffect, useState } from "react";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -49,6 +50,7 @@ interface Defaults {
   templates: Array<{ id: number; name: string; landingPages: string[] | null; dailyBudget: number | null; currency: string | null }>;
   templateId: number | null;
   landingPage: string;
+  landingPages?: string[];
   dailyBudget: number;
   adsetName: string;
   readyFiles: Array<{ id: string; hookLabel: string | null; filename: string; r2Url: string; type: "video" | "image"; versionNumber: number }>;
@@ -117,7 +119,7 @@ export function UploadToMetaDialog({
         setCampaignId(d.suggestedCampaignId ?? (d.campaigns[0]?.id ?? NEW_CAMPAIGN));
         setNewCampaignName(`${d.country?.code ?? ""} ${d.product?.name ?? assignment.autoName ?? assignment.title} ABO`.trim());
         setTemplateId(d.templateId != null ? String(d.templateId) : "");
-        setLandingPage(d.landingPage ?? "");
+        setLandingPage((d.landingPages?.length ? d.landingPages : [d.landingPage ?? ""]).join("\n"));
         setDailyBudget(d.dailyBudget != null ? String(Math.round(d.dailyBudget)) : "500");
         setAdsetName(d.adsetName ?? assignment.autoName ?? assignment.title);
         setSelectedFiles(new Set(d.readyFiles.map((f) => f.id)));
@@ -130,7 +132,8 @@ export function UploadToMetaDialog({
   const selectedCampaign = defaults?.campaigns.find((c) => c.id === campaignId) ?? null;
   const isCbo = !!selectedCampaign?.isCbo;
   const selectedCount = selectedFiles.size;
-  const totalAds = selectedCount * (landingPage.trim() ? 1 : 0);
+  const landingList = landingPage.split(/\n/).map((l) => l.trim()).filter(Boolean);
+  const totalAds = selectedCount * landingList.length;
   const canSubmit =
     !publishing && !loading && !!defaults && totalAds > 0 &&
     (campaignId === NEW_CAMPAIGN ? newCampaignName.trim().length > 0 : campaignId.length > 0) &&
@@ -151,7 +154,7 @@ export function UploadToMetaDialog({
     try {
       const body: Record<string, unknown> = {
         adsetName: adsetName.trim(),
-        landingPages: [landingPage.trim()],
+        landingPages: landingList,
         versionIds: Array.from(selectedFiles),
         optimizationGoal,
         conversionEvent,
@@ -277,8 +280,8 @@ export function UploadToMetaDialog({
             </Field>
 
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Landing page" className="col-span-2">
-                <Input value={landingPage} onChange={(e) => setLandingPage(e.target.value)} placeholder="https://…" className="bg-white/[0.03] border-white/10" />
+              <Field label="Landing pages" className="col-span-2">
+                <Textarea value={landingPage} onChange={(e) => setLandingPage(e.target.value)} placeholder="https://… (one per line — every file × every page becomes an ad)" rows={Math.min(4, Math.max(1, landingList.length || 1))} className="bg-white/[0.03] border-white/10 text-sm font-mono" />
               </Field>
               <Field label="Ad set name">
                 <Input value={adsetName} onChange={(e) => setAdsetName(e.target.value)} className="bg-white/[0.03] border-white/10" />

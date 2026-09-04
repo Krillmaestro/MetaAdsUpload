@@ -93,6 +93,9 @@ export async function GET(
       templates,
       templateId,
       landingPage: assignment.landingPage || defaults?.landingPage || template?.landingPages?.[0] || "",
+      // Several landers = ads multiply (creatives × landers). The brief's
+      // template carries them; otherwise the assignment's single page.
+      landingPages: template?.landingPages?.length ? template.landingPages : [assignment.landingPage || defaults?.landingPage || ""].filter(Boolean),
       dailyBudget: defaults?.dailyBudget ?? template?.dailyBudget ?? 500,
       adsetName: assignment.autoName || assignment.title,
       files,
