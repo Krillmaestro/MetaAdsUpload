@@ -963,7 +963,7 @@ export function AssignmentDetail({
             </div>
           </ScrollArea>
 
-          <DialogFooter className="px-6 pb-4">
+          <DialogFooter className="mx-0 mb-0 px-6 py-4 rounded-b-xl">
             <Button variant="outline" onClick={() => onOpenChange(false)}>
               Close
             </Button>
