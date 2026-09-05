@@ -294,8 +294,8 @@ export function AssignmentDetail({
             </div>
           </DialogHeader>
 
-          <ScrollArea className="max-h-[70vh]">
-            <div className="px-6 pb-6 space-y-5">
+          <ScrollArea className="max-h-[70vh] w-full">
+            <div className="px-6 pb-6 space-y-5 min-w-0 break-words">
               {/* Status & Priority */}
               <div className="flex items-center gap-3">
                 <Badge
@@ -445,7 +445,7 @@ export function AssignmentDetail({
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-2 text-sm">
-                    {assignment.hypothesis && <p className="whitespace-pre-wrap text-slate-200">{assignment.hypothesis}</p>}
+                    {assignment.hypothesis && <p className="whitespace-pre-wrap break-words text-slate-200">{assignment.hypothesis}</p>}
                     <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
                       {assignment.variableTested && <span><span className="text-slate-500">Variabel:</span> {assignment.variableTested}</span>}
                       {assignment.problem && <span><span className="text-slate-500">Problem:</span> {assignment.problem.name}</span>}
@@ -818,7 +818,7 @@ export function AssignmentDetail({
               {(assignment as { briefContent?: string | null }).briefContent && (
                 <div>
                   <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Full Brief</h4>
-                  <div className="text-sm bg-muted/50 rounded-lg p-3 whitespace-pre-wrap">
+                  <div className="text-sm bg-muted/50 rounded-lg p-3 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
                     {(assignment as { briefContent?: string | null }).briefContent}
                   </div>
                 </div>
