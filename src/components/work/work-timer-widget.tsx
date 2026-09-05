@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Play, Pause, Square, X, Timer as TimerIcon, Trash2, AlertTriangle, Loader2, Coffee } from "lucide-react";
+import { Play, Pause, Square, X, Timer as TimerIcon, Trash2, AlertTriangle, Loader2, Coffee, GripVertical } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Textarea } from "@/components/ui/textarea";
@@ -29,7 +29,99 @@ function notifyChanged() {
   window.dispatchEvent(new CustomEvent(WORK_SESSION_EVENT));
 }
 
+
+// ── Drag anywhere ────────────────────────────────────────────────────────────
+// The widget sits bottom-right by default, which is exactly where comment
+// boxes and approve buttons live on the review pages. Grab any header (or the
+// idle pill) to move it; the spot is remembered, kept on screen, and a
+// double-click on the handle puts it back.
+const POS_KEY = "work-timer-widget-pos";
+type Pos = { x: number; y: number };
+
+function useDraggable() {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<Pos | null>(null);
+  const drag = useRef<{ startX: number; startY: number; originX: number; originY: number; moved: boolean } | null>(null);
+  const movedRef = useRef(false);
+
+  const clamp = useCallback((p: Pos): Pos => {
+    const el = ref.current;
+    if (!el) return p;
+    const m = 8;
+    const maxX = Math.max(m, window.innerWidth - el.offsetWidth - m);
+    const maxY = Math.max(m, window.innerHeight - el.offsetHeight - m);
+    return { x: Math.min(Math.max(m, p.x), maxX), y: Math.min(Math.max(m, p.y), maxY) };
+  }, []);
+
+  useEffect(() => {
+    // Read the saved spot after mount (localStorage is client-only) and apply
+    // it on the next frame so the layout has the widget's real size to clamp to.
+    let raw: string | null = null;
+    try { raw = localStorage.getItem(POS_KEY); } catch { /* storage blocked */ }
+    if (!raw) return;
+    const id = requestAnimationFrame(() => {
+      try { setPos(clamp(JSON.parse(raw as string) as Pos)); } catch { /* corrupt value */ }
+    });
+    return () => cancelAnimationFrame(id);
+  }, [clamp]);
+
+  useEffect(() => {
+    const onResize = () => setPos((p) => (p ? clamp(p) : p));
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [clamp]);
+
+  /** Call when the widget changes size (pill ↔ panel) so it stays on screen. */
+  const reclamp = useCallback(() => setPos((p) => (p ? clamp(p) : p)), [clamp]);
+
+  const onPointerDown = (e: React.PointerEvent<HTMLElement>) => {
+    if (e.button !== 0 || !ref.current) return;
+    const r = ref.current.getBoundingClientRect();
+    drag.current = { startX: e.clientX, startY: e.clientY, originX: r.left, originY: r.top, moved: false };
+    movedRef.current = false;
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const onPointerMove = (e: React.PointerEvent<HTMLElement>) => {
+    const d = drag.current;
+    if (!d) return;
+    const dx = e.clientX - d.startX;
+    const dy = e.clientY - d.startY;
+    if (!d.moved && Math.hypot(dx, dy) < 4) return; // a click, not a drag
+    d.moved = true;
+    movedRef.current = true;
+    setPos(clamp({ x: d.originX + dx, y: d.originY + dy }));
+  };
+  const onPointerUp = (e: React.PointerEvent<HTMLElement>) => {
+    const d = drag.current;
+    drag.current = null;
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* already released */ }
+    if (d?.moved) {
+      setPos((p) => {
+        if (p) try { localStorage.setItem(POS_KEY, JSON.stringify(p)); } catch { /* storage blocked */ }
+        return p;
+      });
+    }
+  };
+  const reset = () => {
+    setPos(null);
+    try { localStorage.removeItem(POS_KEY); } catch { /* storage blocked */ }
+  };
+
+  const handleProps = {
+    onPointerDown,
+    onPointerMove,
+    onPointerUp,
+    onPointerCancel: onPointerUp,
+    onDoubleClick: reset,
+    style: { touchAction: "none" as const },
+    title: "Dra för att flytta · dubbelklick lägger tillbaka den",
+  };
+  const style: React.CSSProperties | undefined = pos ? { left: pos.x, top: pos.y, right: "auto", bottom: "auto" } : undefined;
+  return { ref, style, handleProps, movedRef, reclamp };
+}
+
 export function WorkTimerWidget() {
+  const { ref: dragRef, style: dragStyle, handleProps: dragHandle, movedRef: dragMoved, reclamp } = useDraggable();
   const [active, setActive] = useState<WorkSession | null>(null);
   const [categories, setCategories] = useState<WorkTag[]>([]);
   const [brands, setBrands] = useState<WorkTag[]>([]);
@@ -37,6 +129,7 @@ export function WorkTimerWidget() {
   const [busy, setBusy] = useState(false);
 
   const [expanded, setExpanded] = useState(false);
+  useEffect(() => { reclamp(); }, [active, expanded, reclamp]); // pill ↔ panel changes size
   const [categoryId, setCategoryId] = useState<string>("");
   const [brandId, setBrandId] = useState<string>("");
   const [task, setTask] = useState("");
@@ -214,16 +307,19 @@ export function WorkTimerWidget() {
 
   return (
     <>
-      <div className="fixed bottom-4 right-4 z-40 print:hidden max-w-[calc(100vw-2rem)]">
+      <div ref={dragRef} style={dragStyle} className="fixed bottom-4 right-4 z-40 print:hidden max-w-[calc(100vw-2rem)]">
         {/* ── Idle, collapsed ─────────────────────────────────────────────── */}
         {!active && !expanded && (
           <button
+            {...dragHandle}
             onClick={() => {
+              if (dragMoved.current) { dragMoved.current = false; return; }
               setExpanded(true);
               if (!categoryId && categories[0]) setCategoryId(categories[0].id);
             }}
-            className="flex items-center gap-2 rounded-full bg-[#111827] border border-cyan-500/30 pl-3 pr-4 py-2.5 text-sm font-medium text-cyan-300 shadow-lg shadow-black/40 hover:border-cyan-400/60 hover:text-cyan-200 transition-all"
+            className="flex items-center gap-2 rounded-full bg-[#111827] border border-cyan-500/30 pl-2 pr-4 py-2.5 text-sm font-medium text-cyan-300 shadow-lg shadow-black/40 hover:border-cyan-400/60 hover:text-cyan-200 transition-all cursor-grab active:cursor-grabbing"
           >
+            <GripVertical className="h-3.5 w-3.5 text-slate-500" />
             <span className="flex h-6 w-6 items-center justify-center rounded-full bg-cyan-500/15">
               <Play className="h-3 w-3 fill-current" />
             </span>
@@ -234,8 +330,8 @@ export function WorkTimerWidget() {
         {/* ── Idle, picking what to work on ───────────────────────────────── */}
         {!active && expanded && (
           <div className="w-[336px] max-w-full rounded-xl border border-white/10 bg-[#111827] shadow-2xl shadow-black/60 overflow-hidden">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-white/5">
-              <span className="text-sm font-semibold text-white">Vad jobbar du med?</span>
+            <div {...dragHandle} className="flex items-center justify-between px-4 py-3 border-b border-white/5 cursor-grab active:cursor-grabbing select-none">
+              <span className="flex items-center gap-2 text-sm font-semibold text-white"><GripVertical className="h-3.5 w-3.5 text-slate-500" />Vad jobbar du med?</span>
               <button
                 onClick={() => setExpanded(false)}
                 className="text-slate-500 hover:text-slate-300 transition-colors"
@@ -299,7 +395,7 @@ export function WorkTimerWidget() {
             )}
           >
             <div className="px-4 pt-3.5 pb-3">
-              <div className="flex items-center gap-2 mb-2.5 flex-wrap">
+              <div {...dragHandle} className="flex items-center gap-2 mb-2.5 flex-wrap cursor-grab active:cursor-grabbing select-none">
                 <span className="relative flex h-2 w-2 shrink-0">
                   {running && (
                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
@@ -313,6 +409,7 @@ export function WorkTimerWidget() {
                 </span>
                 <Chip color={active.categoryColor} label={active.categoryName ?? "Okänd"} />
                 {active.brandName && <Chip color={active.brandColor} label={active.brandName} />}
+                <GripVertical className="ml-auto h-3.5 w-3.5 text-slate-600" />
               </div>
 
               <div
