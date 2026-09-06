@@ -23,7 +23,7 @@ jobs:
         with:
           node-version: 22
       - run: npm ci --ignore-scripts
-      - run: node --import tsx scripts/publish-worker.mts
+      - run: npx --yes tsx@4 scripts/publish-worker.mts
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           TOKEN_ENCRYPTION_KEY: ${{ secrets.TOKEN_ENCRYPTION_KEY }}
