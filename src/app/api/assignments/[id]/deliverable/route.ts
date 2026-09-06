@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { db, schema } from "@/db";
 import { eq } from "drizzle-orm";
 import { addDeliverableFile } from "@/lib/deliverables";
+import { isElevated } from "@/lib/access";
 
 // PUT /api/assignments/:id/deliverable — register an uploaded file.
 // Body: deliverableUrl, deliverableR2Key, filename, contentType, fileSize,
@@ -27,10 +28,10 @@ export async function PUT(
     if (!assignment) return NextResponse.json({ error: "Assignment not found" }, { status: 404 });
 
     // Editors can only update their own assignments; admins can update any
-    if (session.user.role !== "admin" && assignment.assignedToId !== session.user.id) {
+    if (!isElevated(session.user) && assignment.assignedToId !== session.user.id) {
       return NextResponse.json({ error: "Not authorized" }, { status: 403 });
     }
-    if (session.user.role !== "admin" && !["ready_for_editing", "editing_now", "revision"].includes(assignment.status)) {
+    if (!isElevated(session.user) && !["ready_for_editing", "editing_now", "revision"].includes(assignment.status)) {
       return NextResponse.json({ error: "Uppladdning är stängd i den här statusen" }, { status: 400 });
     }
 

@@ -4,6 +4,7 @@ import { db, schema } from "@/db";
 import { notifyAssignmentEvent } from "@/lib/notifications";
 import { eq, inArray } from "drizzle-orm";
 import { addDeliverableFile, commentsByFile, listDeliverableFiles } from "@/lib/deliverables";
+import { isElevated } from "@/lib/access";
 
 // GET /api/assignments/:id/versions — the assignment's files (one row per
 // hook/file; a revision replaces its file). Active files only unless ?all=1.
@@ -20,7 +21,7 @@ export async function GET(
 
     const [assignment] = await db.select().from(schema.assignments).where(eq(schema.assignments.id, id));
     if (!assignment) return NextResponse.json({ error: "Assignment not found" }, { status: 404 });
-    if (session.user.role !== "admin" && assignment.assignedToId !== session.user.id) {
+    if (!isElevated(session.user) && assignment.assignedToId !== session.user.id) {
       return NextResponse.json({ error: "Access denied" }, { status: 403 });
     }
 
@@ -62,7 +63,7 @@ export async function POST(
 
     const [assignment] = await db.select().from(schema.assignments).where(eq(schema.assignments.id, id));
     if (!assignment) return NextResponse.json({ error: "Assignment not found" }, { status: 404 });
-    if (session.user.role !== "admin" && assignment.assignedToId !== session.user.id) {
+    if (!isElevated(session.user) && assignment.assignedToId !== session.user.id) {
       return NextResponse.json({ error: "Access denied" }, { status: 403 });
     }
 

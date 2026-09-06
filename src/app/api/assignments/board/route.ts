@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { db, schema } from "@/db";
 import { eq, and, sql, desc, asc, inArray } from "drizzle-orm";
+import { isElevated } from "@/lib/access";
 
 const STATUS_KEYS = [
   "DRAFT",
@@ -22,7 +23,7 @@ export async function GET(request: NextRequest) {
   try {
     const session = await auth();
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (session.user.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    if (!isElevated(session.user)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
     const { searchParams } = request.nextUrl;
     const assignedToId = searchParams.get("assignedToId");

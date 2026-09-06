@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { getInsights, extractPurchases, extractPurchaseValue, calculateROAS } from "@/lib/meta/insights";
 import { format, subDays } from "date-fns";
+import { isElevated } from "@/lib/access";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +14,7 @@ export async function GET(request: NextRequest) {
   try {
     const session = await auth();
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (session.user.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    if (!isElevated(session.user)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
     const sp = request.nextUrl.searchParams;
     const since = sp.get("since") || format(subDays(new Date(), 7), "yyyy-MM-dd");

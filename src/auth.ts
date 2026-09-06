@@ -17,6 +17,8 @@ declare module "next-auth" {
       name: string;
       role: string;
       isFounder: boolean;
+      isSuperadmin: boolean;
+      permissions: string[] | null;
       image?: string | null;
     };
   }
@@ -86,13 +88,15 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         session.user.id = token.sub as string;
         session.user.role = token.role as string;
         session.user.isFounder = false;
+        session.user.isSuperadmin = false;
+        session.user.permissions = null;
 
         try {
           // M8: Verify user is still active in DB
           // isFounder is read live (not from the JWT) so flipping the flag takes
           // effect without the user having to sign out and back in.
           const [dbUser] = await db
-            .select({ isActive: users.isActive, isFounder: users.isFounder })
+            .select({ isActive: users.isActive, isFounder: users.isFounder, isSuperadmin: users.isSuperadmin, permissions: users.permissions, role: users.role })
             .from(users)
             .where(and(eq(users.id, token.sub as string), eq(users.isActive, true)))
             .limit(1);
@@ -100,7 +104,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           if (!dbUser) {
             return { expires: session.expires } as unknown as Session;
           }
+          // role, superadmin and permissions are live too, so a change on the
+          // Access page applies on the person's next request.
+          session.user.role = dbUser.role ?? session.user.role;
           session.user.isFounder = dbUser.isFounder ?? false;
+          session.user.isSuperadmin = dbUser.isSuperadmin ?? false;
+          session.user.permissions = Array.isArray(dbUser.permissions) ? dbUser.permissions : null;
         } catch (error) {
           console.error("Session DB check error:", error);
         }

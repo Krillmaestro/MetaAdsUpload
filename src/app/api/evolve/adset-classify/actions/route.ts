@@ -6,6 +6,7 @@ import { updateAdSet, createAdSet } from "@/lib/meta/adsets";
 import { metaApi } from "@/lib/meta/client";
 import { getEvolveSettings } from "@/lib/evolve/settings";
 import { isBig5Targeting, createZombiePlacer } from "@/lib/evolve/zombie";
+import { isElevated } from "@/lib/access";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +14,7 @@ export async function POST(request: NextRequest) {
   try {
     const session = await auth();
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (session.user.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    if (!isElevated(session.user)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
     const body = await request.json();
     const { adsetId, action, classification, metrics, campaignId, adsetName, dateRange, graveyardOutcome } = body as {

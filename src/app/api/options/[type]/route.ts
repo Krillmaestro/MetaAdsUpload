@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { db, schema } from "@/db";
 import { asc, sql, eq } from "drizzle-orm";
+import { isElevated } from "@/lib/access";
 
 function getTable(type: string) {
   switch (type) {
@@ -47,7 +48,7 @@ export async function POST(
   try {
     const session = await auth();
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (session.user.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    if (!isElevated(session.user)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
     const { type } = await params;
     const body = await request.json();
@@ -101,7 +102,7 @@ export async function DELETE(
   try {
     const session = await auth();
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (session.user.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    if (!isElevated(session.user)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
     const { type } = await params;
     const { id } = await request.json();

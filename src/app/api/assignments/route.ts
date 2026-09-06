@@ -5,6 +5,7 @@ import { eq, and, sql, desc, asc, inArray } from "drizzle-orm";
 import { notifyAssignmentEvent } from "@/lib/notifications";
 import { generateAutoName } from "@/lib/auto-name";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { isElevated } from "@/lib/access";
 
 export async function GET(request: NextRequest) {
   try {
@@ -126,7 +127,7 @@ export async function POST(request: NextRequest) {
   try {
     const session = await auth();
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (session.user.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    if (!isElevated(session.user)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
     const userId = session.user.id;
     const body = await request.json();

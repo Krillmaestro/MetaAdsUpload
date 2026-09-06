@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { ListObjectsV2Command } from "@aws-sdk/client-s3";
 import { getR2Client } from "@/lib/r2";
+import { isElevated } from "@/lib/access";
 
 export const dynamic = "force-dynamic";
 
@@ -9,7 +10,7 @@ export async function GET(request: NextRequest) {
   try {
     const session = await auth();
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (session.user.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    if (!isElevated(session.user)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
     const bucketName = process.env.R2_BUCKET_NAME?.trim();
     const publicUrl = process.env.R2_PUBLIC_URL?.trim();

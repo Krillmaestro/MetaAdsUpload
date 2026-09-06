@@ -4,6 +4,7 @@ import { WorkTimerWidget } from "@/components/work/work-timer-widget";
 import { auth } from "@/auth";
 import { db, schema } from "@/db";
 import { eq } from "drizzle-orm";
+import { allowedAreas, homeFor } from "@/lib/access";
 
 export default async function DashboardLayout({
   children,
@@ -11,22 +12,23 @@ export default async function DashboardLayout({
   children: React.ReactNode;
 }) {
   const session = await auth();
-  const userRole = (session?.user?.role || "editor") as "admin" | "editor";
-  const isFounder = !!session?.user?.isFounder;
+  const user = session?.user ?? null;
+  const areas = [...allowedAreas(user)];
+  const isFounder = !!user?.isFounder;
 
   let editorSlug: string | null = null;
-  if (userRole !== "admin" && session?.user?.id) {
-    const [user] = await db
+  if (user?.id) {
+    const [row] = await db
       .select({ slug: schema.users.slug })
       .from(schema.users)
-      .where(eq(schema.users.id, session.user.id))
+      .where(eq(schema.users.id, user.id))
       .limit(1);
-    editorSlug = user?.slug ?? null;
+    editorSlug = user.role !== "admin" ? row?.slug ?? null : null;
   }
 
   return (
     <div className="flex h-screen overflow-hidden bg-[#0a0e1a] bg-grid-pattern">
-      <Sidebar userRole={userRole} editorSlug={editorSlug} isFounder={isFounder} />
+      <Sidebar areas={areas} editorSlug={editorSlug} home={homeFor(user)} />
       <div className="flex flex-1 flex-col overflow-hidden">
         <main className="flex-1 overflow-auto p-4 md:p-6">
           <div className="max-w-[1800px]">{children}</div>

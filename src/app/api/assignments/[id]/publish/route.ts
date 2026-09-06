@@ -9,6 +9,7 @@ import { createAdCreative, uploadImage, uploadVideo, waitForVideoReady, getVideo
 import { metaApi, getAdAccountId } from "@/lib/meta/client";
 import { applyLinks } from "@/lib/learning-loop/link";
 import { listDeliverableFiles, APPROVED } from "@/lib/deliverables";
+import { isElevated } from "@/lib/access";
 
 export const maxDuration = 300; // large videos: Meta-side download + processing wait
 
@@ -64,7 +65,7 @@ export async function POST(
   try {
     const session = await auth();
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (session.user.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    if (!isElevated(session.user)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
     const { id } = await params;
     const config: PublishConfig = await request.json();

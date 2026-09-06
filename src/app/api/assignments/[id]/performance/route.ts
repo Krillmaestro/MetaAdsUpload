@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { db, schema } from "@/db";
 import { eq } from "drizzle-orm";
 import { getAssignmentPerformance, type Period } from "@/lib/learning-loop/rows";
+import { isElevated } from "@/lib/access";
 
 export const dynamic = "force-dynamic";
 
@@ -12,7 +13,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const { id } = await params;
   try {
-    if (session.user.role !== "admin") {
+    if (!isElevated(session.user)) {
       const [a] = await db.select({ assignedToId: schema.assignments.assignedToId }).from(schema.assignments).where(eq(schema.assignments.id, id)).limit(1);
       if (!a || a.assignedToId !== session.user.id) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { applyProposals, buildProposals } from "@/lib/adsets/auto-assign";
+import { isElevated } from "@/lib/access";
 
 export const dynamic = "force-dynamic";
 
@@ -18,7 +19,7 @@ export const dynamic = "force-dynamic";
 async function guard() {
   const session = await auth();
   if (!session?.user) return { session: null, error: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) };
-  if (session.user.role !== "admin") {
+  if (!isElevated(session.user)) {
     return { session: null, error: NextResponse.json({ error: "Forbidden" }, { status: 403 }) };
   }
   return { session, error: null };

@@ -29,102 +29,53 @@ import {
   Rocket,
   Hourglass,
   Repeat,
+  ShieldCheck,
 } from "lucide-react";
+import { AREAS, type AreaDef } from "@/lib/access";
 import { signOut } from "next-auth/react";
 
-type NavSection = {
-  label: string;
-  requiredRole?: "admin";
-  items: { href: string; label: string; icon: React.ComponentType<{ className?: string }> }[];
-};
+type NavItem = { href: string; label: string; icon: React.ComponentType<{ className?: string }> };
+type NavSection = { label: string; items: NavItem[] };
 
-// Founder-only pages — the co-founder may not hold an admin role.
-const founderSection: NavSection = {
-  label: "FOUNDERS",
-  items: [
-    { href: "/time", label: "Time Tracker", icon: Hourglass },
+// One icon per area (src/lib/access.ts decides who sees which area).
+const AREA_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
+  dashboard: LayoutDashboard, "learning-loop": Repeat, "daily-summary": Sun,
+  "adset-analyzer": BarChart3, campaigns: Megaphone, "kpi-settings": SlidersHorizontal,
+  upload: Upload, templates: FileText, creatives: Image,
+  assignments: LayoutGrid, "my-work": ClipboardList, review: Eye, timer: Timer,
+  editors: Users, scorecards: Users2, options: SlidersHorizontal, shopify: ShoppingBag, settings: Settings,
+  time: Hourglass, access: ShieldCheck,
+};
+// Extra links that live inside an area.
+const AREA_EXTRA_LINKS: Record<string, NavItem[]> = {
+  upload: [
+    { href: "/upload/native", label: "Native Ad", icon: Rocket },
+    { href: "/upload-log", label: "Upload Log", icon: History },
   ],
 };
+const GROUP_ORDER: AreaDef["group"][] = ["Overview", "Analyze", "Launch", "Workflow", "Team", "Founders"];
 
-// Video editors get a minimal menu: their workflow + their own public page.
-function editorNavSections(editorSlug?: string | null, isFounder?: boolean): NavSection[] {
-  return [
-    {
-      label: "WORKFLOW",
-      items: [
-        { href: "/my-work", label: "My Work", icon: ClipboardList },
-        { href: "/timer", label: "Timer", icon: Timer },
-      ],
-    },
-    ...(isFounder ? [founderSection] : []),
-    ...(editorSlug
-      ? [{
-          label: "MY PAGE",
-          items: [{ href: `/e/${editorSlug}`, label: "My Editor Page", icon: TrendingUp }],
-        }]
-      : []),
-  ];
+function buildSections(areas: string[], editorSlug?: string | null): NavSection[] {
+  const allowed = new Set(areas);
+  const sections: NavSection[] = [];
+  for (const group of GROUP_ORDER) {
+    const items: NavItem[] = [];
+    for (const a of AREAS) {
+      if (a.group !== group || !allowed.has(a.key)) continue;
+      items.push({ href: a.href, label: a.label, icon: AREA_ICONS[a.key] ?? LayoutGrid });
+      for (const extra of AREA_EXTRA_LINKS[a.key] ?? []) items.push(extra);
+    }
+    if (items.length) sections.push({ label: group.toUpperCase(), items });
+  }
+  if (editorSlug) {
+    sections.push({ label: "MY PAGE", items: [{ href: `/e/${editorSlug}`, label: "My Editor Page", icon: TrendingUp }] });
+  }
+  return sections;
 }
 
-const navSections: NavSection[] = [
-  {
-    label: "OVERVIEW",
-    items: [
-      { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-      { href: "/learning-loop", label: "Learning Loop", icon: Repeat },
-      { href: "/daily-summary", label: "Daily Summary", icon: Sun },
-    ],
-  },
-  {
-    label: "ANALYZE",
-    items: [
-      { href: "/adset-analyzer", label: "Ad Set Analyzer", icon: BarChart3 },
-      { href: "/campaigns", label: "Campaigns", icon: Megaphone },
-      { href: "/evolve-settings", label: "KPI Settings", icon: SlidersHorizontal },
-    ],
-  },
-  {
-    label: "LAUNCH",
-    items: [
-      { href: "/upload", label: "Upload", icon: Upload },
-      { href: "/upload/native", label: "Native Ad", icon: Rocket },
-      { href: "/upload-log", label: "Upload Log", icon: History },
-      { href: "/templates", label: "Templates", icon: FileText },
-      { href: "/creatives", label: "Creatives", icon: Image },
-    ],
-  },
-  {
-    label: "WORKFLOW",
-    items: [
-      { href: "/assignments", label: "Assignments", icon: LayoutGrid },
-      { href: "/my-work", label: "My Work", icon: ClipboardList },
-      { href: "/review", label: "Review", icon: Eye },
-      { href: "/timer", label: "Timer", icon: Timer },
-    ],
-  },
-  {
-    label: "TEAM",
-    requiredRole: "admin",
-    items: [
-      { href: "/editors", label: "Editors & Bonus", icon: Users },
-      { href: "/scorecards", label: "Scorecards", icon: Users2 },
-      { href: "/options", label: "Options", icon: SlidersHorizontal },
-      { href: "/shopify", label: "Shopify ncROAS", icon: ShoppingBag },
-      { href: "/settings", label: "Settings", icon: Settings },
-    ],
-  },
-];
-
-function SidebarContent({ onNavClick, userRole, editorSlug, isFounder }: { onNavClick?: () => void; userRole: "admin" | "editor"; editorSlug?: string | null; isFounder?: boolean }) {
+function SidebarContent({ onNavClick, areas, editorSlug, home }: { onNavClick?: () => void; areas: string[]; editorSlug?: string | null; home: string }) {
   const pathname = usePathname();
-
-  const filteredSections =
-    userRole === "admin"
-      ? [
-          ...navSections.filter((s) => !s.requiredRole || s.requiredRole === userRole),
-          ...(isFounder ? [founderSection] : []),
-        ]
-      : editorNavSections(editorSlug, isFounder);
+  const filteredSections = buildSections(areas, editorSlug);
 
   return (
     <>
@@ -134,7 +85,7 @@ function SidebarContent({ onNavClick, userRole, editorSlug, isFounder }: { onNav
           <Megaphone className="h-4 w-4 text-white" />
         </div>
         <Link
-          href={userRole === "admin" ? "/dashboard" : "/my-work"}
+          href={home}
           className="font-bold text-base text-white tracking-tight"
           onClick={onNavClick}
         >
@@ -193,14 +144,14 @@ function SidebarContent({ onNavClick, userRole, editorSlug, isFounder }: { onNav
   );
 }
 
-export function Sidebar({ userRole = "editor", editorSlug, isFounder }: { userRole?: "admin" | "editor"; editorSlug?: string | null; isFounder?: boolean }) {
+export function Sidebar({ areas, editorSlug, home }: { areas: string[]; editorSlug?: string | null; home: string }) {
   const [mobileOpen, setMobileOpen] = useState(false);
 
   return (
     <>
       {/* Desktop sidebar — always visible at md+ */}
       <div className="hidden md:flex h-screen w-56 flex-col bg-[#0f1629] border-r border-white/5 shrink-0">
-        <SidebarContent userRole={userRole} editorSlug={editorSlug} isFounder={isFounder} />
+        <SidebarContent areas={areas} editorSlug={editorSlug} home={home} />
       </div>
 
       {/* Mobile drawer backdrop */}
@@ -227,7 +178,7 @@ export function Sidebar({ userRole = "editor", editorSlug, isFounder }: { userRo
           <X className="h-5 w-5" />
         </button>
 
-        <SidebarContent onNavClick={() => setMobileOpen(false)} userRole={userRole} editorSlug={editorSlug} isFounder={isFounder} />
+        <SidebarContent onNavClick={() => setMobileOpen(false)} areas={areas} editorSlug={editorSlug} home={home} />
       </div>
 
       {/* Mobile top bar */}

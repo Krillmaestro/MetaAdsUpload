@@ -8,6 +8,7 @@ import { getPageId, getPixelId, metaApi, getAdAccountId, MetaApiError, withAccou
 import { db, schema } from "@/db";
 import { eq } from "drizzle-orm";
 import { getR2Client, getR2Bucket } from "@/lib/r2";
+import { isElevated } from "@/lib/access";
 
 export const maxDuration = 300; // 5 minutes for large video uploads
 
@@ -154,7 +155,7 @@ export async function POST(request: NextRequest) {
   try {
     const session = await auth();
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (session.user.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    if (!isElevated(session.user)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
     const body = await request.json();
     const {

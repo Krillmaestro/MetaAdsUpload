@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { db, schema } from "@/db";
 import { eq } from "drizzle-orm";
+import { isElevated } from "@/lib/access";
 
 // PATCH /api/assignments/:id/versions/:versionId/status — review one file.
 // Body: { reviewStatus: "approved" | "needs_review" | "no_status", reviewNote?: string | null }
@@ -13,7 +14,7 @@ export async function PATCH(
   try {
     const session = await auth();
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (session.user.role !== "admin") return NextResponse.json({ error: "Bara admin granskar filer" }, { status: 403 });
+    if (!isElevated(session.user)) return NextResponse.json({ error: "Bara admin granskar filer" }, { status: 403 });
 
     const { id, versionId } = await params;
     const body = await request.json();

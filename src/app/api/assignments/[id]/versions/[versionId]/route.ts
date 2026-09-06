@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { db, schema } from "@/db";
 import { eq } from "drizzle-orm";
 import { removeDeliverableFile } from "@/lib/deliverables";
+import { isElevated } from "@/lib/access";
 
 // DELETE /api/assignments/:id/versions/:versionId — remove a file for good.
 // Admin: always. Editor: own assignment while it is still being edited.
@@ -17,7 +18,7 @@ export async function DELETE(
 
     const [assignment] = await db.select().from(schema.assignments).where(eq(schema.assignments.id, id));
     if (!assignment) return NextResponse.json({ error: "Assignment not found" }, { status: 404 });
-    if (session.user.role !== "admin") {
+    if (!isElevated(session.user)) {
       if (assignment.assignedToId !== session.user.id) return NextResponse.json({ error: "Access denied" }, { status: 403 });
       if (!["ready_for_editing", "editing_now", "revision"].includes(assignment.status)) {
         return NextResponse.json({ error: "Filer kan bara tas bort medan uppdraget redigeras" }, { status: 400 });

@@ -15,6 +15,7 @@ const pageTitles: Record<string, string> = {
   "/editors": "Editor Performance",
   "/scorecards": "Editor Scorecards",
   "/settings": "Settings",
+  "/access": "Access",
 };
 
 export function Header() {

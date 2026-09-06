@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import type { Session } from "next-auth";
+import { isElevated } from "@/lib/access";
 
 export async function getSession() {
   return await auth();
@@ -19,7 +20,7 @@ export async function requireAdmin() {
   if (!session?.user) {
     throw new Error("Unauthorized");
   }
-  if (session.user.role !== "admin") {
+  if (!isElevated(session.user)) {
     throw new Error("Forbidden: admin access required");
   }
   return session;
@@ -34,7 +35,7 @@ export async function guardAdmin(): Promise<{ session: Session; error: null } | 
   if (!session?.user) {
     return { session: null, error: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) };
   }
-  if (session.user.role !== "admin") {
+  if (!isElevated(session.user)) {
     return { session: null, error: NextResponse.json({ error: "Forbidden" }, { status: 403 }) };
   }
   return { session, error: null };

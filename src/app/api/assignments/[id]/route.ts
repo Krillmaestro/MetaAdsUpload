@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { db, schema } from "@/db";
 import { eq, and, desc } from "drizzle-orm";
 import { generateAutoName } from "@/lib/auto-name";
+import { isElevated } from "@/lib/access";
 
 export async function GET(
   _request: NextRequest,
@@ -93,7 +94,7 @@ export async function PUT(
     const body = await request.json();
 
     // Allow creative strategists to update only strategistNotes
-    if (session.user.role !== "admin") {
+    if (!isElevated(session.user)) {
       if (body.strategistNotes !== undefined && Object.keys(body).length === 1) {
         const [current] = await db.select().from(schema.assignments).where(eq(schema.assignments.id, id));
         if (!current) return NextResponse.json({ error: "Assignment not found" }, { status: 404 });
@@ -224,7 +225,7 @@ export async function DELETE(
   try {
     const session = await auth();
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (session.user.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    if (!isElevated(session.user)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
     const { id } = await params;
 

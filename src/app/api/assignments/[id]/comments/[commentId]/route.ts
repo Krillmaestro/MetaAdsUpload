@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { db, schema } from "@/db";
 import { eq } from "drizzle-orm";
+import { isElevated } from "@/lib/access";
 
 // PATCH /api/assignments/:id/comments/:commentId — update a comment (body, isResolved, reactions)
 export async function PATCH(
@@ -19,7 +20,7 @@ export async function PATCH(
     const [assignment] = await db.select().from(schema.assignments).where(eq(schema.assignments.id, id));
     if (!assignment) return NextResponse.json({ error: "Assignment not found" }, { status: 404 });
 
-    if (session.user.role !== "admin" && assignment.assignedToId !== session.user.id) {
+    if (!isElevated(session.user) && assignment.assignedToId !== session.user.id) {
       return NextResponse.json({ error: "Access denied" }, { status: 403 });
     }
 
@@ -35,7 +36,7 @@ export async function PATCH(
     const updateData: Record<string, unknown> = { updatedAt: new Date() };
 
     if (body.bodyText !== undefined) {
-      if (session.user.role !== "admin" && comment.authorId !== session.user.id) {
+      if (!isElevated(session.user) && comment.authorId !== session.user.id) {
         return NextResponse.json({ error: "Only the author can edit this comment" }, { status: 403 });
       }
       updateData.body = body.bodyText;
@@ -88,7 +89,7 @@ export async function DELETE(
     if (!comment) return NextResponse.json({ error: "Comment not found" }, { status: 404 });
 
     // Only author or admin can delete
-    if (session.user.role !== "admin" && comment.authorId !== session.user.id) {
+    if (!isElevated(session.user) && comment.authorId !== session.user.id) {
       return NextResponse.json({ error: "Only the author can delete this comment" }, { status: 403 });
     }
 

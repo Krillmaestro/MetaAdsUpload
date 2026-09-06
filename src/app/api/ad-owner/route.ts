@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { db, schema } from "@/db";
 import { eq, inArray } from "drizzle-orm";
+import { isElevated } from "@/lib/access";
 
 // GET /api/ad-owner?adId=...        → owner for one ad
 // GET /api/ad-owner?adIds=a,b,c     → owners for several ads (for the analyzer)
@@ -40,7 +41,7 @@ export async function POST(request: NextRequest) {
   try {
     const session = await auth();
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (session.user.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    if (!isElevated(session.user)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
     const body = await request.json();
     const { adId, videoEditorId, creativeStrategistId, adName, campaignId, adsetId, source, angle, problem, templateId, templateName } = body;
@@ -113,7 +114,7 @@ export async function DELETE(request: NextRequest) {
   try {
     const session = await auth();
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (session.user.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    if (!isElevated(session.user)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
     const { adId } = await request.json();
     if (!adId) return NextResponse.json({ error: "adId is required" }, { status: 400 });

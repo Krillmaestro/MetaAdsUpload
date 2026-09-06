@@ -4,12 +4,13 @@ import { db, schema } from "@/db";
 import { encryptSecret } from "@/lib/crypto";
 import { invalidateAccountCache } from "@/lib/meta/client";
 import { fetchAdAccountsAndPages } from "@/lib/meta/assets";
+import { isElevated } from "@/lib/access";
 
 export async function GET(request: NextRequest) {
   // C4: Auth + admin role check
   const session = await auth();
   if (!session?.user) return NextResponse.redirect(new URL("/login", request.url));
-  if (session.user.role !== "admin") return NextResponse.redirect(new URL("/settings?error=forbidden", request.url));
+  if (!isElevated(session.user)) return NextResponse.redirect(new URL("/settings?error=forbidden", request.url));
 
   const code = request.nextUrl.searchParams.get("code");
   const error = request.nextUrl.searchParams.get("error");

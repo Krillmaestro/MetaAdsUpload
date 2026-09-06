@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { db, schema } from "@/db";
 import { eq } from "drizzle-orm";
+import { isElevated } from "@/lib/access";
 
 // DELETE /api/assignments/:id/share/:linkId — deactivate a share link
 export async function DELETE(
@@ -17,7 +18,7 @@ export async function DELETE(
     const [assignment] = await db.select().from(schema.assignments).where(eq(schema.assignments.id, id));
     if (!assignment) return NextResponse.json({ error: "Assignment not found" }, { status: 404 });
 
-    if (session.user.role !== "admin" && assignment.assignedToId !== session.user.id) {
+    if (!isElevated(session.user) && assignment.assignedToId !== session.user.id) {
       return NextResponse.json({ error: "Access denied" }, { status: 403 });
     }
 

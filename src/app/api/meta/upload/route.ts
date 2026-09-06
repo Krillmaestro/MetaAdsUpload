@@ -4,13 +4,14 @@ import { uploadImage, uploadVideo, createAdCreative } from "@/lib/meta/creatives
 import { createCampaign } from "@/lib/meta/campaigns";
 import { createAdSet } from "@/lib/meta/adsets";
 import { createAd } from "@/lib/meta/ads";
+import { isElevated } from "@/lib/access";
 
 export async function POST(request: NextRequest) {
   try {
     // C3: Auth + admin role check
     const session = await auth();
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (session.user.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    if (!isElevated(session.user)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
     const body = await request.json();
     const {

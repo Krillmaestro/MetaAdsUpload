@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { getAdSets, updateAdSet } from "@/lib/meta/adsets";
 import { metaApi } from "@/lib/meta/client";
+import { isElevated } from "@/lib/access";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -16,7 +17,7 @@ export async function POST() {
   try {
     const session = await auth();
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (session.user.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    if (!isElevated(session.user)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
     // Fetch all active ad sets
     const adsets = await getAdSets(undefined, 500, "ACTIVE");

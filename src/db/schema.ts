@@ -14,6 +14,10 @@ export const users = pgTable("users", {
   publicPagePassword: text("public_page_password"), // optional bcrypt hash to gate the public page
   isActive: boolean("is_active").default(true).notNull(),
   isFounder: boolean("is_founder").default(false).notNull(), // gates the founder time tracker (/time)
+  isSuperadmin: boolean("is_superadmin").default(false).notNull(), // manages people + access (/access)
+  // Areas of the app this person may use (keys from src/lib/access.ts).
+  // null = the role's default set; a list = exactly these (plus /time for founders).
+  permissions: jsonb("permissions").$type<string[] | null>(),
   hourlyRate: real("hourly_rate"),
   phone: text("phone"), // E.164, e.g. +46701234567 — used for WhatsApp notifications
   timezone: text("timezone").default("Europe/Stockholm"),

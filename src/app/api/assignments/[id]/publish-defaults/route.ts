@@ -4,6 +4,7 @@ import { db, schema } from "@/db";
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { getAdAccountId } from "@/lib/meta/client";
 import { listDeliverableFiles, APPROVED } from "@/lib/deliverables";
+import { isElevated } from "@/lib/access";
 
 // GET /api/assignments/:id/publish-defaults — everything the Upload-to-Meta
 // dialog needs prefilled: the campaign this product+country last went into
@@ -16,7 +17,7 @@ export async function GET(
   try {
     const session = await auth();
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (session.user.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    if (!isElevated(session.user)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     const { id } = await params;
 
     const [assignment] = await db.select().from(schema.assignments).where(eq(schema.assignments.id, id));

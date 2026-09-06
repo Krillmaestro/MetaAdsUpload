@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { db, schema } from "@/db";
 import { eq } from "drizzle-orm";
 import { randomBytes } from "crypto";
+import { isElevated } from "@/lib/access";
 
 // GET /api/assignments/:id/share — list share links for an assignment
 export async function GET(
@@ -18,7 +19,7 @@ export async function GET(
     const [assignment] = await db.select().from(schema.assignments).where(eq(schema.assignments.id, id));
     if (!assignment) return NextResponse.json({ error: "Assignment not found" }, { status: 404 });
 
-    if (session.user.role !== "admin" && assignment.assignedToId !== session.user.id) {
+    if (!isElevated(session.user) && assignment.assignedToId !== session.user.id) {
       return NextResponse.json({ error: "Access denied" }, { status: 403 });
     }
 
@@ -75,7 +76,7 @@ export async function POST(
     const [assignment] = await db.select().from(schema.assignments).where(eq(schema.assignments.id, id));
     if (!assignment) return NextResponse.json({ error: "Assignment not found" }, { status: 404 });
 
-    if (session.user.role !== "admin" && assignment.assignedToId !== session.user.id) {
+    if (!isElevated(session.user) && assignment.assignedToId !== session.user.id) {
       return NextResponse.json({ error: "Access denied" }, { status: 403 });
     }
 
