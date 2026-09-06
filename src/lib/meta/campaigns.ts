@@ -43,6 +43,9 @@ export async function createCampaign(params: {
         ...params,
         status: params.status || "PAUSED",
         special_ad_categories: params.special_ad_categories || [],
+        // Required by Meta since 2026 for campaigns without a campaign budget
+        // (ABO): may ad sets share 20 % of their budgets? We keep budgets separate.
+        ...(params.daily_budget ? {} : { is_adset_budget_sharing_enabled: false }),
       },
     }
   );

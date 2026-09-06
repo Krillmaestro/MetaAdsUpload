@@ -176,6 +176,9 @@ export default function AssignmentsPage() {
     });
   }, []);
 
+  // Anything left half-done on the server (an upload job) gets a nudge whenever the board opens.
+  useEffect(() => { fetch("/api/publish-jobs", { method: "POST" }).catch(() => {}); }, []);
+
   useEffect(() => {
     fetchBoard();
   }, [fetchBoard]);

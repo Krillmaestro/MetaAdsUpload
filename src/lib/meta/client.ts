@@ -425,9 +425,13 @@ export async function metaApi<T = unknown>(
       }
 
       if (!res.ok) {
-        const metaError = data?.error as { message?: string; code?: number; error_subcode?: number } | undefined;
+        const metaError = data?.error as { message?: string; code?: number; error_subcode?: number; error_user_title?: string; error_user_msg?: string } | undefined;
+        // Meta's human explanation (error_user_msg) is the part that tells you what to fix.
+        const explained = metaError?.error_user_msg
+          ? `${metaError.message || "Meta API error"} — ${metaError.error_user_title ? metaError.error_user_title + ": " : ""}${metaError.error_user_msg}`
+          : metaError?.message;
         const err = new MetaApiError(
-          metaError?.message || `Meta API error: ${res.status}`,
+          explained || `Meta API error: ${res.status}`,
           res.status,
           metaError?.code,
           metaError?.error_subcode,

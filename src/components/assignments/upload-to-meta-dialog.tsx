@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
+import { PublishProgress } from "@/components/assignments/publish-progress";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
@@ -57,18 +58,6 @@ interface Defaults {
   lastUsed: { campaignName: string | null; updatedAt: string } | null;
 }
 
-interface PublishResult {
-  success: boolean;
-  meta?: {
-    campaignId: string;
-    adsetId: string;
-    adsetName: string;
-    totalAds: number;
-    formula: string;
-    ads: Array<{ adId: string; adName: string; creativeName: string; landingPage: string }>;
-  };
-}
-
 const NEW_CAMPAIGN = "__new__";
 
 export function UploadToMetaDialog({
@@ -86,7 +75,7 @@ export function UploadToMetaDialog({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [defaults, setDefaults] = useState<Defaults | null>(null);
   const [publishing, setPublishing] = useState(false);
-  const [result, setResult] = useState<PublishResult | null>(null);
+  const [jobId, setJobId] = useState<string | null>(null);
 
   const [campaignId, setCampaignId] = useState<string>("");
   const [newCampaignName, setNewCampaignName] = useState("");
@@ -104,7 +93,7 @@ export function UploadToMetaDialog({
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    setResult(null);
+    setJobId(null);
     setLoadError(null);
     setLoading(true);
     fetch(`/api/assignments/${assignment.id}/publish-defaults`)
@@ -173,9 +162,8 @@ export function UploadToMetaDialog({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Upload failed");
-      setResult(data);
-      toast.success(`${data.meta?.totalAds ?? selectedCount} ads uploaded to Meta`);
-      onPublished?.();
+      setJobId(data.jobId);
+      toast.success(data.existing ? "Upload already running — showing its progress" : "Upload started on the server");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Upload failed");
     } finally {
@@ -194,36 +182,11 @@ export function UploadToMetaDialog({
           <p className="text-xs text-slate-500 font-mono">{assignment.autoName || assignment.title}</p>
         </DialogHeader>
 
-        {result?.meta ? (
+        {jobId ? (
           <div className="space-y-4 py-2">
-            <div className="flex items-center justify-center">
-              <CheckCircle2 className="h-14 w-14 text-emerald-400" />
-            </div>
-            <div className="text-center">
-              <h3 className="text-base font-semibold text-white">Uploaded</h3>
-              <p className="text-sm text-slate-400 mt-1">{result.meta.formula}</p>
-            </div>
-            <div className="rounded-lg bg-white/[0.02] border border-white/5 p-3 space-y-1.5 text-sm">
-              <div className="flex justify-between gap-4">
-                <span className="text-slate-500">Ad set</span>
-                <span className="text-slate-200 text-right">{result.meta.adsetName}</span>
-              </div>
-              <div className="flex justify-between gap-4">
-                <span className="text-slate-500">Ads</span>
-                <span className="text-slate-200">{result.meta.totalAds}</span>
-              </div>
-              <div className="flex justify-between gap-4">
-                <span className="text-slate-500">Status</span>
-                <span className="text-amber-300">Paused — turn on in Ads Manager</span>
-              </div>
-            </div>
-            <div className="max-h-40 overflow-y-auto rounded-lg border border-white/5 divide-y divide-white/5">
-              {result.meta.ads.map((ad) => (
-                <div key={ad.adId} className="px-3 py-1.5 text-xs text-slate-300 truncate">{ad.adName}</div>
-              ))}
-            </div>
+            <PublishProgress jobId={jobId} onDone={() => onPublished?.()} />
             <DialogFooter>
-              <Button onClick={() => onOpenChange(false)}>Done</Button>
+              <Button onClick={() => onOpenChange(false)}>Close</Button>
             </DialogFooter>
           </div>
         ) : loading ? (

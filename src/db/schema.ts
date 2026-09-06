@@ -691,6 +691,50 @@ export const deliverableVersions = pgTable("deliverable_versions", {
   index("dv_version_idx").on(table.assignmentId, table.versionNumber),
 ]);
 
+// Upload-to-Meta as a resumable job. Every step is short and idempotent, the
+// state after each step is saved here, and any driver (the dialog polling,
+// the server chaining itself, the 5-minute worker on GitHub) can pick the
+// job up until it is done. Nothing is ever created twice.
+export interface PublishJobState {
+  campaignId?: string;
+  campaignName?: string;
+  budgetType?: "ABO" | "CBO";
+  adsetId?: string;
+  adsetName?: string;
+  pageId?: string;
+  pixelId?: string;
+  copy?: { headlines: string[]; primaryTexts: string[]; descriptions: string[]; ctaType: string };
+  landingPages?: string[];
+  files?: Array<{ versionId: string; name: string; type: "video" | "image"; url: string; hookLabel: string | null }>;
+  media?: Record<string, { videoId?: string; imageHash?: string; thumbnailUrl?: string; ready?: boolean; startedAt?: string }>;
+  ads?: Record<string, { adId: string; creativeId: string; adName: string; landingPage: string }>;
+  postId?: string | null;
+  finalized?: boolean;
+  log?: Array<{ at: string; msg: string }>;
+}
+
+export const publishJobs = pgTable("publish_jobs", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  assignmentId: text("assignment_id").notNull(),
+  createdById: text("created_by_id"),
+  status: text("status").notNull().default("queued"), // queued | running | waiting | done | failed
+  step: text("step").notNull().default("preflight"), // preflight | campaign | adset | media | ads | finalize | done
+  config: jsonb("config").$type<Record<string, unknown>>().notNull().default({}),
+  state: jsonb("state").$type<PublishJobState>().notNull().default({}),
+  attempts: integer("attempts").default(0).notNull(), // consecutive failures of the current step
+  lastError: text("last_error"),
+  nextRunAt: timestamp("next_run_at").defaultNow(),
+  lockedAt: timestamp("locked_at"),
+  lockToken: text("lock_token"),
+  totalAds: integer("total_ads"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  finishedAt: timestamp("finished_at"),
+}, (table) => [
+  index("publish_jobs_assignment_idx").on(table.assignmentId),
+  index("publish_jobs_status_idx").on(table.status),
+]);
+
 // What the Upload-to-Meta dialog prefills for a product + country: the last
 // campaign/template/budget/landing page used. Written on every publish.
 export const publishDefaults = pgTable("publish_defaults", {

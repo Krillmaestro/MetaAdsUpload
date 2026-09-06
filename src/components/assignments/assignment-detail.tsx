@@ -53,6 +53,7 @@ import {
 import Link from "next/link";
 import { toast } from "sonner";
 import { UploadToMetaDialog } from "@/components/assignments/upload-to-meta-dialog";
+import { PublishProgress, type JobSummary } from "@/components/assignments/publish-progress";
 import { AssignmentPerformance } from "@/components/assignments/assignment-performance";
 import { AWARENESS_LEVELS } from "@/components/learning-loop/format";
 import { cn } from "@/lib/utils";
@@ -139,6 +140,16 @@ export function AssignmentDetail({
   const [fileNote, setFileNote] = useState("");
   const [savingFileId, setSavingFileId] = useState<string | null>(null);
   const [showUploadDialog, setShowUploadDialog] = useState(false);
+
+  // The latest Upload-to-Meta job, shown as a banner while it runs or if it stopped.
+  const [publishJob, setPublishJob] = useState<JobSummary | null>(null);
+  useEffect(() => {
+    if (!open) { setPublishJob(null); return; }
+    let cancelled = false;
+    fetch(`/api/publish-jobs?assignmentId=${assignment.id}`).then((r) => (r.ok ? r.json() : null)).then((d) => { if (!cancelled && d?.job && d.job.status !== "done") setPublishJob(d.job); }).catch(() => {});
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, assignment.id]);
 
   const fetchDeliverableFiles = async () => {
     try {
@@ -313,6 +324,13 @@ export function AssignmentDetail({
                 </Badge>
               </div>
 
+              {publishJob && (
+                <Card className={publishJob.status === "failed" ? "border-red-500/30" : "border-cyan-500/30"}>
+                  <CardContent className="pt-4">
+                    <PublishProgress jobId={publishJob.id} initial={publishJob} compact onDone={() => { setPublishJob(null); onUploadComplete?.(); }} />
+                  </CardContent>
+                </Card>
+              )}
               {/* Quick Actions */}
               <Card>
                 <CardHeader className="pb-2">

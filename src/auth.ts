@@ -128,6 +128,13 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       const isPublicEditor = request.nextUrl.pathname.startsWith("/e/");
       const isPublicEditorApi = request.nextUrl.pathname.startsWith("/api/e/");
 
+      // The server drives Upload-to-Meta jobs by calling itself with the worker
+      // secret (no session). Those routes verify the secret themselves.
+      const isJobApi = request.nextUrl.pathname.startsWith("/api/publish-jobs");
+      const workerSecret = (process.env.CRON_SECRET ?? "").trim();
+      const hasWorkerSecret = !!workerSecret && request.headers.get("x-worker-secret") === workerSecret;
+      if (isJobApi && hasWorkerSecret) return true;
+
       if (isAuthApi) return true;
       if (isSeedApi) {
         // Seed route handles its own secret-based auth
