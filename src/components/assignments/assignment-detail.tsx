@@ -55,7 +55,7 @@ import { toast } from "sonner";
 import { UploadToMetaDialog } from "@/components/assignments/upload-to-meta-dialog";
 import { PublishProgress, type JobSummary } from "@/components/assignments/publish-progress";
 import { AssignmentPerformance } from "@/components/assignments/assignment-performance";
-import { AWARENESS_LEVELS } from "@/components/learning-loop/format";
+import { AWARENESS_LEVELS, adTypeLabel } from "@/components/learning-loop/format";
 import { cn } from "@/lib/utils";
 import {
   STATUS_CONFIG,
@@ -457,7 +457,7 @@ export function AssignmentDetail({
                       Learning Loop · hypotes
                       {assignment.adType && (
                         <span className="ml-auto rounded bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-normal text-violet-300">
-                          {assignment.adType === "iteration" ? "Iteration" : "Ideation"}
+                          {adTypeLabel(assignment.adType) || "Ideation"}
                         </span>
                       )}
                     </CardTitle>

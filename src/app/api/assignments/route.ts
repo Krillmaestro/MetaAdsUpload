@@ -273,7 +273,7 @@ export async function POST(request: NextRequest) {
         problemId: problemId || null,
         hypothesis: typeof hypothesis === "string" ? hypothesis : null,
         variableTested: typeof variableTested === "string" ? variableTested : null,
-        adType: adType === "ideation" || adType === "iteration" ? adType : null,
+        adType: ["ideation", "iteration", "scraped"].includes(adType) ? adType : null,
         iterationOfId: iterationOfId || null,
         awarenessLevel: typeof awarenessLevel === "string" && awarenessLevel ? awarenessLevel : null,
         publishTemplateId: typeof publishTemplateId === "number" ? publishTemplateId : null,

@@ -15,7 +15,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
 import { Plus, Trash2, CalendarIcon, Loader2, ChevronDown, Save, X, LayoutTemplate, BookmarkPlus, FlaskConical } from "lucide-react";
-import { AWARENESS_LEVELS } from "@/components/learning-loop/format";
+import { AWARENESS_LEVELS, AD_TYPES } from "@/components/learning-loop/format";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -1033,7 +1033,7 @@ export function AssignmentModal({ open, onOpenChange, assignment, onSaved }: Ass
                           <FlaskConical className="h-3.5 w-3.5" /> Learning Loop · testet
                         </h3>
                         <div className="flex items-center gap-1 rounded-lg border border-white/[0.06] p-0.5">
-                          {[{ v: "ideation", l: "💡 Ideation" }, { v: "iteration", l: "🔄 Iteration" }].map((o) => (
+                          {AD_TYPES.map((t) => ({ v: t.value, l: `${t.icon} ${t.label}` })).map((o) => (
                             <button key={o.v} type="button"
                               onClick={() => updateForm({ adType: form.adType === o.v ? "" : o.v })}
                               className={cn("rounded-md px-2.5 py-1 text-xs transition-colors",

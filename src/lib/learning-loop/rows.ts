@@ -374,7 +374,7 @@ export const BREAKDOWN_DIMENSIONS: Array<{ key: string; label: string }> = [
   { key: "angle", label: "Angle" },
   { key: "landing", label: "Landing" },
   { key: "roleLabel", label: "Lager" },
-  { key: "adType", label: "Ideation/Iteration" },
+  { key: "adType", label: "Ad type" },
   { key: "driver", label: "Drivkraft (ur lärdomar)" },
 ];
 

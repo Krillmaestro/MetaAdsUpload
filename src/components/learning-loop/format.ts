@@ -76,3 +76,12 @@ export const STATUS_LABEL: Record<string, string> = {
   ready_for_posting: "Redo att posta",
   posted: "Postad",
 };
+
+// What kind of test the brief is: a new idea, a change to a winner, or a
+// creative scraped from a competitor/reference and rebuilt for us.
+export const AD_TYPES: Array<{ value: string; label: string; icon: string }> = [
+  { value: "ideation", label: "Ideation", icon: "💡" },
+  { value: "iteration", label: "Iteration", icon: "🔄" },
+  { value: "scraped", label: "Scraped", icon: "🧲" },
+];
+export const adTypeLabel = (v: string | null | undefined) => AD_TYPES.find((t) => t.value === v)?.label ?? (v ? v : "");

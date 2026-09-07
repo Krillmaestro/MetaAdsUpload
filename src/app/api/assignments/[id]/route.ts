@@ -179,7 +179,7 @@ export async function PUT(
     if (problemId !== undefined) updateData.problemId = problemId || null;
     if (hypothesis !== undefined) updateData.hypothesis = hypothesis || null;
     if (variableTested !== undefined) updateData.variableTested = variableTested || null;
-    if (adType !== undefined) updateData.adType = adType === "ideation" || adType === "iteration" ? adType : null;
+    if (adType !== undefined) updateData.adType = ["ideation", "iteration", "scraped"].includes(adType) ? adType : null;
     if (iterationOfId !== undefined) updateData.iterationOfId = iterationOfId || null;
     if (awarenessLevel !== undefined) updateData.awarenessLevel = awarenessLevel || null;
     if (publishTemplateId !== undefined) updateData.publishTemplateId = typeof publishTemplateId === "number" ? publishTemplateId : null;

@@ -12,6 +12,7 @@ import { VerdictSelect } from "./verdict-select";
 import { LearningDialog, LearningSummary } from "./learning-dialog";
 import { MediaPreview } from "./media-preview";
 import { LinkPicker } from "./link-picker";
+import { adTypeLabel } from "@/components/learning-loop/format";
 
 function Stat({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent?: string }) {
   return (
@@ -97,7 +98,7 @@ export function RowDetails({
             </div>
             <div className="flex flex-wrap gap-1 text-[10px]">
               <span className="rounded bg-white/5 px-1.5 py-0.5 text-slate-400">{STATUS_LABEL[a.status] ?? a.status}</span>
-              {a.adType && <span className="rounded bg-violet-500/10 px-1.5 py-0.5 text-violet-300">{a.adType === "iteration" ? "Iteration" : "Ideation"}</span>}
+              {a.adType && <span className="rounded bg-violet-500/10 px-1.5 py-0.5 text-violet-300">{adTypeLabel(a.adType)}</span>}
               {a.awarenessLevel && <span className="rounded bg-white/5 px-1.5 py-0.5 text-slate-400">{AWARENESS_LEVELS.find((l) => l.value === a.awarenessLevel)?.label ?? a.awarenessLevel}</span>}
               {row.linkSource && <span className="rounded bg-white/5 px-1.5 py-0.5 text-slate-600">koppling: {row.linkSource}</span>}
             </div>
