@@ -65,7 +65,8 @@ export default function NativeUploadPage() {
   const [scheduleForTomorrow, setScheduleForTomorrow] = useState(false);
 
   // Shared creative settings
-  const [landingPage, setLandingPage] = useState("");
+  // One batch = ONE ad set; every creative becomes one ad per landing page.
+  const [landingPages, setLandingPages] = useState<Array<{ label: string; url: string }>>([{ label: "PP", url: "" }]);
   const [ctaType, setCtaType] = useState("SHOP_NOW");
 
   const [creatives, setCreatives] = useState<Creative[]>([]);
@@ -89,7 +90,8 @@ export default function NativeUploadPage() {
         if (p.optGoal) setNewAdsetOptGoal(p.optGoal);
         if (p.bidStrategy) setNewAdsetBidStrategy(p.bidStrategy);
         if (p.convEvent) setNewAdsetConvEvent(p.convEvent);
-        if (p.landingPage) setLandingPage(p.landingPage);
+        if (Array.isArray(p.landingPages) && p.landingPages.length) setLandingPages(p.landingPages);
+        else if (p.landingPage) setLandingPages([{ label: "PP", url: p.landingPage }]);
         if (p.cta) setCtaType(p.cta);
         if (p.adAccountId) setAdAccountId(p.adAccountId);
       }
@@ -105,11 +107,11 @@ export default function NativeUploadPage() {
         campaignId: selectedCampaignId, adsetMode, selectedAdsetId,
         pageId: selectedPageId, pixelId, country: newAdsetCountry,
         budget: newAdsetBudget, optGoal: newAdsetOptGoal, bidStrategy: newAdsetBidStrategy,
-        convEvent: newAdsetConvEvent, landingPage, cta: ctaType, adAccountId,
+        convEvent: newAdsetConvEvent, landingPages, cta: ctaType, adAccountId,
       }));
     } catch { /* ignore */ }
   }, [selectedCampaignId, adsetMode, selectedAdsetId, selectedPageId, pixelId, newAdsetCountry,
-      newAdsetBudget, newAdsetOptGoal, newAdsetBidStrategy, newAdsetConvEvent, landingPage, ctaType, adAccountId]);
+      newAdsetBudget, newAdsetOptGoal, newAdsetBidStrategy, newAdsetConvEvent, landingPages, ctaType, adAccountId]);
 
   // ─── Load connection (pages, ad accounts, defaults) ────────────────────────
   useEffect(() => {
@@ -216,7 +218,7 @@ export default function NativeUploadPage() {
 
   const buildAdsetConfig = () => {
     const cfg: Record<string, unknown> = {
-      name: newAdsetName || `Native AdSet ${new Date().toLocaleDateString("sv")}`,
+      name: newAdsetName || `Native AdSet ${new Date().toLocaleDateString("sv")} - ${landingPages.map((l) => l.label.trim() || "LP").join(" + ")}`,
       dailyBudget: newAdsetBudget,
       targeting: { geo_locations: { countries: countriesForSelection(newAdsetCountry) } },
       optimizationGoal: newAdsetOptGoal,
@@ -244,50 +246,60 @@ export default function NativeUploadPage() {
       return undefined;
     }
 
-    updateCreative(c.id, { status: "creating", step: "Creating ad on Meta…" });
-    const payload: Record<string, unknown> = {
-      r2Key, r2Url,
-      filename: c.filename,
-      mediaType: c.mediaType,
-      campaignId: selectedCampaignId,
-      adCopy: {
-        headlines: [c.headline.trim()],
-        primaryTexts: [c.primaryText.trim()],
-        linkUrl: landingPage.trim(),
-        ctaType,
-      },
-      adName: (c.headline.trim() || c.filename.replace(/\.[^.]+$/, "")).slice(0, 60),
-    };
-    if (selectedPageId) payload.pageId = selectedPageId;
-    if (pixelId) payload.pixelId = pixelId;
-    if (adAccountId) payload.adAccountId = adAccountId;
-    if (adsetIdToUse) payload.adsetId = adsetIdToUse;
-    else if (adsetMode === "existing" && selectedAdsetId) payload.adsetId = selectedAdsetId;
-    else payload.adsetConfig = buildAdsetConfig();
+    const lps = landingPages.filter((l) => l.url.trim());
+    const baseName = (c.headline.trim() || c.filename.replace(/\.[^.]+$/, "")).slice(0, 60);
+    let adsetId = adsetIdToUse ?? (adsetMode === "existing" && selectedAdsetId ? selectedAdsetId : undefined);
+    let lastAdId: string | undefined;
+    for (let i = 0; i < lps.length; i++) {
+      const lp = lps[i];
+      updateCreative(c.id, { status: "creating", step: lps.length > 1 ? `Creating ad ${i + 1}/${lps.length} (${lp.label.trim()})…` : "Creating ad on Meta…" });
+      const payload: Record<string, unknown> = {
+        r2Key, r2Url,
+        filename: c.filename,
+        mediaType: c.mediaType,
+        campaignId: selectedCampaignId,
+        adCopy: {
+          headlines: [c.headline.trim()],
+          primaryTexts: [c.primaryText.trim()],
+          linkUrl: lp.url.trim(),
+          ctaType,
+        },
+        adName: lps.length > 1 ? `${baseName} [${lp.label.trim()}]` : baseName,
+      };
+      if (selectedPageId) payload.pageId = selectedPageId;
+      if (pixelId) payload.pixelId = pixelId;
+      if (adAccountId) payload.adAccountId = adAccountId;
+      if (adsetId) payload.adsetId = adsetId;
+      else payload.adsetConfig = buildAdsetConfig();
 
-    try {
-      const res = await fetch("/api/meta/upload-from-r2", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const result = await res.json();
-      if (!res.ok) {
-        updateCreative(c.id, { status: "failed", step: "Failed", error: result.error || "Meta upload failed" });
-        return undefined;
+      try {
+        const res = await fetch("/api/meta/upload-from-r2", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const result = await res.json();
+        if (!res.ok) {
+          updateCreative(c.id, { status: "failed", step: "Failed", error: `${lp.label.trim()}: ${result.error || "Meta upload failed"}`, adsetId });
+          return adsetId;
+        }
+        lastAdId = result.adId;
+        adsetId = adsetId || (result.adsetId as string | undefined);
+      } catch (e) {
+        updateCreative(c.id, { status: "failed", step: "Failed", error: e instanceof Error ? e.message : "Request failed", adsetId });
+        return adsetId;
       }
-      updateCreative(c.id, { status: "done", step: "Done!", adId: result.adId, adsetId: result.adsetId });
-      return result.adsetId as string | undefined;
-    } catch (e) {
-      updateCreative(c.id, { status: "failed", step: "Failed", error: e instanceof Error ? e.message : "Request failed" });
-      return undefined;
     }
+    updateCreative(c.id, { status: "done", step: lps.length > 1 ? `Done — ${lps.length} ads` : "Done!", adId: lastAdId, adsetId });
+    return adsetId;
   };
 
   const validate = (): string | null => {
     if (!selectedCampaignId) return "Select a campaign";
     if (adsetMode === "existing" && !selectedAdsetId) return "Select an ad set or switch to 'Create new'";
-    if (!landingPage.trim()) return "Add a landing page URL";
+    const lps = landingPages.filter((l) => l.url.trim());
+    if (lps.length === 0) return "Add at least one landing page URL";
+    if (landingPages.some((l) => l.url.trim() && !l.label.trim())) return "Give every landing page a label (PP, 5R, LP1 …)";
     if (creatives.length === 0) return "Add at least one creative";
     for (const c of creatives) {
       if (!c.headline.trim()) return `Missing headline for "${c.filename}"`;
@@ -487,8 +499,19 @@ export default function NativeUploadPage() {
       <div className={cardCls}>
         <div className="grid gap-3 md:grid-cols-[1fr_auto]">
           <div className="space-y-1.5">
-            <label className={labelCls}>Landing page URL (shared)</label>
-            <input value={landingPage} onChange={(e) => setLandingPage(e.target.value)} placeholder="https://…" className={inputCls} />
+            <label className={labelCls}>Landing pages (shared) — every creative becomes one ad per page, all in the same ad set</label>
+            <div className="space-y-1.5">
+              {landingPages.map((lp, i) => (
+                <div key={i} className="flex gap-2">
+                  <input value={lp.label} onChange={(e) => setLandingPages((prev) => prev.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)))} placeholder="PP" className={`${inputCls} w-20 shrink-0 font-mono`} />
+                  <input value={lp.url} onChange={(e) => setLandingPages((prev) => prev.map((x, j) => (j === i ? { ...x, url: e.target.value } : x)))} placeholder="https://…" className={inputCls} />
+                  {landingPages.length > 1 && (
+                    <button type="button" onClick={() => setLandingPages((prev) => prev.filter((_, j) => j !== i))} className="px-2 text-slate-500 hover:text-red-400" aria-label="Remove landing page">×</button>
+                  )}
+                </div>
+              ))}
+              <button type="button" onClick={() => setLandingPages((prev) => [...prev, { label: prev.length === 1 ? "5R" : `LP${prev.length + 1}`, url: "" }])} className="text-xs text-cyan-400 hover:text-cyan-300">+ Add landing page</button>
+            </div>
           </div>
           <div className="space-y-1.5">
             <label className={labelCls}>CTA</label>
