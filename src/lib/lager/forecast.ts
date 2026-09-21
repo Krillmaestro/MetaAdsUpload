@@ -99,7 +99,12 @@ export async function buildForecast(): Promise<{ products: ProductForecast[]; ge
       for (const [day, units] of s) if (day > count.countedOn) soldSinceCount += units;
       for (const po of pos) {
         if (po.productId !== p.id || !po.receivedOn) continue;
-        if (po.receivedOn > count.countedOn) receivedSinceCount += po.units;
+        // Dates have day resolution, so a delivery booked in on the same day as the
+        // count is decided by the clock: it only adds if it was booked after the count.
+        const after =
+          po.receivedOn > count.countedOn ||
+          (po.receivedOn === count.countedOn && po.updatedAt > count.createdAt);
+        if (after) receivedSinceCount += po.units;
       }
       stock = count.units - soldSinceCount + receivedSinceCount;
     }
