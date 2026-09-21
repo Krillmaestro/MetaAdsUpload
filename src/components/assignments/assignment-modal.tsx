@@ -43,6 +43,7 @@ interface AllOptions {
   countries: OptionItem[];
   offerTypes: OptionItem[];
   customerAvatars: OptionItem[];
+  reasonsToBuy: OptionItem[];
   scriptStructures: OptionItem[];
 }
 
@@ -70,6 +71,8 @@ interface FormState {
   countryId: string;
   offerTypeId: string;
   scriptStructureId: string;
+  reasonToBuyId: string;
+  avatarUsed: string;
   customerAvatarIds: string[];
   landingPage: string;
   assignedToId: string;
@@ -102,6 +105,8 @@ interface BriefTemplate {
   offerTypeId: string | null;
   scriptStructureId: string | null;
   customerAvatarIds: string[] | null;
+  reasonToBuyId: string | null;
+  avatarUsed: string | null;
   estimatedMinutes: number | null;
   priority: string | null;
   references: FormState["references"] | null;
@@ -171,6 +176,8 @@ const emptyForm: FormState = {
   countryId: "",
   offerTypeId: "",
   scriptStructureId: "",
+  reasonToBuyId: "",
+  avatarUsed: "",
   customerAvatarIds: [],
   landingPage: "",
   assignedToId: "",
@@ -386,6 +393,8 @@ export function AssignmentModal({ open, onOpenChange, assignment, onSaved }: Ass
     payload.offerTypeId = f.offerTypeId || null;
     payload.scriptStructureId = f.scriptStructureId || null;
     payload.customerAvatarIds = f.customerAvatarIds;
+    payload.reasonToBuyId = f.reasonToBuyId || null;
+    payload.avatarUsed = f.avatarUsed || null;
     payload.landingPage = f.landingPage || null;
     if (f.assignedToId) payload.assignedToId = f.assignedToId;
     payload.creativeStrategistId = f.creativeStrategistId || null;
@@ -489,6 +498,8 @@ export function AssignmentModal({ open, onOpenChange, assignment, onSaved }: Ass
       offerTypeId: f.offerTypeId || null,
       scriptStructureId: f.scriptStructureId || null,
       customerAvatarIds: f.customerAvatarIds,
+      reasonToBuyId: f.reasonToBuyId || null,
+      avatarUsed: f.avatarUsed || null,
       priority: f.priority.toLowerCase(),
       references: f.references,
       scriptContent: hasScript ? s : null,
@@ -516,6 +527,8 @@ export function AssignmentModal({ open, onOpenChange, assignment, onSaved }: Ass
       offerTypeId: t.offerTypeId ?? "",
       scriptStructureId: t.scriptStructureId ?? "",
       customerAvatarIds: t.customerAvatarIds ?? [],
+      reasonToBuyId: t.reasonToBuyId ?? "",
+      avatarUsed: t.avatarUsed ?? "",
       landingPage: t.landingPage ?? "",
       assignedToId: t.assignedToId ?? formRef.current.assignedToId,
       creativeStrategistId: t.creativeStrategistId ?? "",
@@ -610,6 +623,8 @@ export function AssignmentModal({ open, onOpenChange, assignment, onSaved }: Ass
             offerTypeId: assignment.offerTypeId || "",
             scriptStructureId: assignment.scriptStructureId || "",
             customerAvatarIds: assignment.customerAvatars || [],
+            reasonToBuyId: assignment.reasonToBuy?.id || "",
+            avatarUsed: assignment.avatarUsed || "",
             landingPage: assignment.landingPage || "",
             // Drafts are auto-assigned to their creator; don't prefill that as the editor
             assignedToId: assignment.assignedToId === assignment.assignedById ? "" : assignment.assignedToId,
@@ -641,6 +656,8 @@ export function AssignmentModal({ open, onOpenChange, assignment, onSaved }: Ass
         offerTypeId: assignment.offerTypeId || "",
         scriptStructureId: assignment.scriptStructureId || "",
         customerAvatarIds: assignment.customerAvatars || [],
+        reasonToBuyId: assignment.reasonToBuy?.id || "",
+        avatarUsed: assignment.avatarUsed || "",
         landingPage: assignment.landingPage || "",
         assignedToId: assignment.assignedToId,
         creativeStrategistId: assignment.creativeStrategistId || "",
@@ -756,6 +773,8 @@ export function AssignmentModal({ open, onOpenChange, assignment, onSaved }: Ass
       offerTypeId: form.offerTypeId || undefined,
       scriptStructureId: form.scriptStructureId || undefined,
       customerAvatarIds: form.customerAvatarIds,
+      reasonToBuyId: form.reasonToBuyId || null,
+      avatarUsed: form.avatarUsed || null,
       landingPage: form.landingPage || undefined,
       assignedToId: form.assignedToId,
       creativeStrategistId: form.creativeStrategistId || undefined,
@@ -1023,6 +1042,19 @@ export function AssignmentModal({ open, onOpenChange, assignment, onSaved }: Ass
                         <OptionSelect value={form.scriptStructureId} onChange={(v) => updateForm({ scriptStructureId: v })}
                           items={options?.scriptStructures || []} placeholder="Select structure..."
                           label="Script Structure" apiType="script-structures" onOptionsRefresh={refreshOptions} />
+                        <OptionSelect value={form.reasonToBuyId} onChange={(v) => updateForm({ reasonToBuyId: v })}
+                          items={options?.reasonsToBuy || []} placeholder="Select reason..."
+                          label="Reason to Buy" apiType="reasons-to-buy" onOptionsRefresh={refreshOptions} />
+                        <div className="space-y-1.5 col-span-2 lg:col-span-2">
+                          <Label className="text-xs font-medium text-slate-500 uppercase tracking-wider">Avatar</Label>
+                          <Input
+                            id="assignment-avatar-used"
+                            value={form.avatarUsed}
+                            onChange={(e) => updateForm({ avatarUsed: e.target.value })}
+                            placeholder="Vilken avatar användes? T.ex. hundägaren som provat allt..."
+                            className="bg-white/[0.03] border-white/[0.06] text-sm h-10"
+                          />
+                        </div>
                       </div>
                     </div>
 

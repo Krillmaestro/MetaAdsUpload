@@ -42,7 +42,7 @@ export async function GET(
       .reduce((sum, te) => sum + (te.durationSeconds || 0), 0);
 
     // Look up related names
-    const [assignedTo, assignedBy, cs, angle, format, product, country, offerType, scriptStructure, problem] = await Promise.all([
+    const [assignedTo, assignedBy, cs, angle, format, product, country, offerType, scriptStructure, problem, reasonToBuy] = await Promise.all([
       db.select({ id: schema.users.id, name: schema.users.name, email: schema.users.email }).from(schema.users).where(eq(schema.users.id, assignment.assignedToId)).then(r => r[0]),
       db.select({ id: schema.users.id, name: schema.users.name, email: schema.users.email }).from(schema.users).where(eq(schema.users.id, assignment.assignedById)).then(r => r[0]),
       assignment.creativeStrategistId
@@ -55,6 +55,7 @@ export async function GET(
       assignment.offerTypeId ? db.select().from(schema.offerTypes).where(eq(schema.offerTypes.id, assignment.offerTypeId)).then(r => r[0]) : null,
       assignment.scriptStructureId ? db.select({ id: schema.scriptStructures.id, name: schema.scriptStructures.name }).from(schema.scriptStructures).where(eq(schema.scriptStructures.id, assignment.scriptStructureId)).then(r => r[0]) : null,
       assignment.problemId ? db.select({ id: schema.problems.id, name: schema.problems.name }).from(schema.problems).where(eq(schema.problems.id, assignment.problemId)).then(r => r[0]) : null,
+      assignment.reasonToBuyId ? db.select({ id: schema.reasonsToBuy.id, name: schema.reasonsToBuy.name }).from(schema.reasonsToBuy).where(eq(schema.reasonsToBuy.id, assignment.reasonToBuyId)).then(r => r[0]) : null,
     ]);
 
     return NextResponse.json({
@@ -118,7 +119,7 @@ export async function PUT(
 
     const {
       batchNumber, version, formatId, angleId, productId, countryId,
-      offerTypeId, scriptStructureId, customerAvatarIds, landingPage, assignedToId,
+      offerTypeId, scriptStructureId, reasonToBuyId, avatarUsed, customerAvatarIds, landingPage, assignedToId,
       creativeStrategistId, creativeStrategistName, priority, dueDate, estimatedMinutes,
       videoLengthSeconds, description, scriptContent, revisionFeedback,
       strategistNotes, briefContent, references,
@@ -160,6 +161,8 @@ export async function PUT(
     if (countryId !== undefined) updateData.countryId = countryId;
     if (offerTypeId !== undefined) updateData.offerTypeId = offerTypeId;
     if (scriptStructureId !== undefined) updateData.scriptStructureId = scriptStructureId;
+    if (reasonToBuyId !== undefined) updateData.reasonToBuyId = reasonToBuyId;
+    if (avatarUsed !== undefined) updateData.avatarUsed = avatarUsed;
     if (customerAvatarIds !== undefined) updateData.customerAvatarIds = customerAvatarIds;
     if (landingPage !== undefined) updateData.landingPage = landingPage;
     if (assignedToId !== undefined) updateData.assignedToId = assignedToId;

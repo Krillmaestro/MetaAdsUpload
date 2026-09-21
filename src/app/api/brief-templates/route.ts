@@ -28,6 +28,8 @@ export async function POST(request: NextRequest) {
       countryId: body.countryId ?? null,
       offerTypeId: body.offerTypeId ?? null,
       scriptStructureId: body.scriptStructureId ?? null,
+      reasonToBuyId: body.reasonToBuyId ?? null,
+      avatarUsed: body.avatarUsed ?? null,
       customerAvatarIds: body.customerAvatarIds ?? [],
       estimatedMinutes: body.estimatedMinutes ?? null,
       priority: body.priority ?? "medium",

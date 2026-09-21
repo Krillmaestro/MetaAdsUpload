@@ -12,6 +12,7 @@ function getTable(type: string) {
     case "countries": return schema.countries;
     case "offer-types": return schema.offerTypes;
     case "customer-avatars": return schema.customerAvatars;
+    case "reasons-to-buy": return schema.reasonsToBuy;
     default: return null;
   }
 }

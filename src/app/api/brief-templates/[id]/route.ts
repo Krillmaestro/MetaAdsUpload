@@ -11,7 +11,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const body = await request.json();
     const updates: Record<string, unknown> = { updatedAt: new Date() };
     for (const key of [
-      "name", "briefContent", "formatId", "angleId", "productId", "countryId", "offerTypeId", "scriptStructureId",
+      "name", "briefContent", "formatId", "angleId", "productId", "countryId", "offerTypeId", "scriptStructureId", "reasonToBuyId", "avatarUsed",
       "customerAvatarIds", "estimatedMinutes", "priority", "references", "scriptContent",
       "problemId", "landingPage", "assignedToId", "creativeStrategistId", "creativeStrategistName", "description",
       "hypothesis", "variableTested", "adType", "awarenessLevel", "publishTemplateId",

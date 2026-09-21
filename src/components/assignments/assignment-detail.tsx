@@ -48,7 +48,8 @@ import {
   Loader2,
   FlaskConical,
   Flag,
-  Rocket,
+  Rocket, Users,
+
 } from "lucide-react";
 import Link from "next/link";
 import { toast } from "sonner";
@@ -515,6 +516,20 @@ export function AssignmentDetail({
                       <FileText className="h-4 w-4 text-muted-foreground" />
                       <span className="text-muted-foreground">Script Structure:</span>
                       <span className="font-medium">{assignment.scriptStructure.name}</span>
+                    </div>
+                  )}
+                  {assignment.reasonToBuy && (
+                    <div className="flex items-center gap-3 text-sm">
+                      <Target className="h-4 w-4 text-muted-foreground" />
+                      <span className="text-muted-foreground">Reason to Buy:</span>
+                      <span className="font-medium">{assignment.reasonToBuy.name}</span>
+                    </div>
+                  )}
+                  {assignment.avatarUsed && (
+                    <div className="flex items-start gap-3 text-sm">
+                      <Users className="h-4 w-4 text-muted-foreground mt-0.5" />
+                      <span className="text-muted-foreground">Avatar:</span>
+                      <span className="font-medium">{assignment.avatarUsed}</span>
                     </div>
                   )}
                   {assignment.offerType && (

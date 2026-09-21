@@ -73,7 +73,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Look up related entity names for each assignment
-    const [allUsers, allAngles, allFormats, allProducts, allCountries, allOfferTypes, allScriptStructures, allProblems] = await Promise.all([
+    const [allUsers, allAngles, allFormats, allProducts, allCountries, allOfferTypes, allScriptStructures, allProblems, allReasonsToBuy] = await Promise.all([
       db.select({ id: schema.users.id, name: schema.users.name, email: schema.users.email }).from(schema.users),
       db.select({ id: schema.angles.id, name: schema.angles.name }).from(schema.angles),
       db.select({ id: schema.formats.id, name: schema.formats.name }).from(schema.formats),
@@ -82,6 +82,7 @@ export async function GET(request: NextRequest) {
       db.select({ id: schema.offerTypes.id, name: schema.offerTypes.name }).from(schema.offerTypes),
       db.select({ id: schema.scriptStructures.id, name: schema.scriptStructures.name }).from(schema.scriptStructures),
       db.select({ id: schema.problems.id, name: schema.problems.name }).from(schema.problems),
+      db.select({ id: schema.reasonsToBuy.id, name: schema.reasonsToBuy.name }).from(schema.reasonsToBuy),
     ]);
 
     const problemMap = new Map(allProblems.map(p => [p.id, p]));
@@ -92,6 +93,7 @@ export async function GET(request: NextRequest) {
     const countryMap = new Map(allCountries.map(c => [c.id, c]));
     const offerTypeMap = new Map(allOfferTypes.map(o => [o.id, o]));
     const scriptStructureMap = new Map(allScriptStructures.map(s => [s.id, s]));
+    const reasonToBuyMap = new Map(allReasonsToBuy.map(r => [r.id, r]));
 
     const enriched = assignments.map(a => ({
       ...a,
@@ -107,6 +109,7 @@ export async function GET(request: NextRequest) {
       country: a.countryId ? countryMap.get(a.countryId) || null : null,
       offerType: a.offerTypeId ? offerTypeMap.get(a.offerTypeId) || null : null,
       scriptStructure: a.scriptStructureId ? scriptStructureMap.get(a.scriptStructureId) || null : null,
+      reasonToBuy: a.reasonToBuyId ? reasonToBuyMap.get(a.reasonToBuyId) || null : null,
       problem: a.problemId ? problemMap.get(a.problemId) || null : null,
     }));
 
@@ -141,6 +144,8 @@ export async function POST(request: NextRequest) {
       countryId,
       offerTypeId,
       scriptStructureId,
+      reasonToBuyId,
+      avatarUsed,
       customerAvatarIds = [],
       landingPage,
       assignedToId,
@@ -178,6 +183,8 @@ export async function POST(request: NextRequest) {
           countryId: null,
           offerTypeId: null,
           scriptStructureId: null,
+          reasonToBuyId: null,
+          avatarUsed: null,
           customerAvatarIds: [],
           landingPage: null,
           assignedToId: userId,
@@ -257,6 +264,8 @@ export async function POST(request: NextRequest) {
         countryId: countryId || null,
         offerTypeId: offerTypeId || null,
         scriptStructureId: scriptStructureId || null,
+        reasonToBuyId: reasonToBuyId || null,
+        avatarUsed: avatarUsed || null,
         customerAvatarIds,
         landingPage: landingPage || null,
         assignedToId,

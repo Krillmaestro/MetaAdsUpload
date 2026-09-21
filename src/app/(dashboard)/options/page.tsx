@@ -27,10 +27,11 @@ import {
   ArrowDown,
   RefreshCw,
   AlertCircle,
+  ShoppingCart,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-type OptionType = "angles" | "products" | "formats" | "countries" | "offerTypes" | "customerAvatars";
+type OptionType = "angles" | "products" | "formats" | "countries" | "offerTypes" | "customerAvatars" | "reasonsToBuy";
 
 interface OptionItem {
   id: string;
@@ -48,6 +49,7 @@ interface AllOptions {
   countries: OptionItem[];
   offerTypes: OptionItem[];
   customerAvatars: OptionItem[];
+  reasonsToBuy: OptionItem[];
 }
 
 const TABS_CONFIG: {
@@ -63,6 +65,7 @@ const TABS_CONFIG: {
   { key: "countries", label: "Countries", icon: Globe, hasCode: true, hasDescription: false },
   { key: "offerTypes", label: "Offer Types", icon: Gift, hasCode: false, hasDescription: false },
   { key: "customerAvatars", label: "Avatars", icon: Users, hasCode: true, hasDescription: true },
+  { key: "reasonsToBuy", label: "Reasons to Buy", icon: ShoppingCart, hasCode: false, hasDescription: false },
 ];
 
 function getApiPath(type: OptionType): string {
@@ -73,6 +76,7 @@ function getApiPath(type: OptionType): string {
     countries: "countries",
     offerTypes: "offer-types",
     customerAvatars: "customer-avatars",
+    reasonsToBuy: "reasons-to-buy",
   };
   return map[type];
 }

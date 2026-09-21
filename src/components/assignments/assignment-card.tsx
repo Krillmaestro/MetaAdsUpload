@@ -68,6 +68,8 @@ export interface EditorAssignment {
   offerType: { id: string; name: string } | null;
   scriptStructureId: string | null;
   scriptStructure: { id: string; name: string } | null;
+  reasonToBuy?: { id: string; name: string } | null;
+  avatarUsed?: string | null;
   customerAvatars: string[];
   landingPage: string | null;
   assignedToId: string;
