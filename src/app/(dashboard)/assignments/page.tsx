@@ -70,12 +70,14 @@ function KanbanColumn({
   onCardClick,
   onStatusChange,
   onPublish,
+  onDeleted,
 }: {
   status: AssignmentStatus;
   assignments: EditorAssignment[];
   onCardClick: (a: EditorAssignment) => void;
   onStatusChange: (id: string, status: AssignmentStatus) => void;
   onPublish?: (a: EditorAssignment) => void;
+  onDeleted?: () => void;
 }) {
   const config = STATUS_CONFIG[status];
   const StatusIcon = config.icon;
@@ -101,6 +103,7 @@ function KanbanColumn({
             onClick={() => onCardClick(assignment)}
             onStatusChange={(newStatus) => onStatusChange(assignment.id, newStatus)}
             onPublish={status === "READY_FOR_POSTING" && onPublish ? () => onPublish(assignment) : undefined}
+            onDeleted={onDeleted}
           />
         ))}
         {assignments.length === 0 && (
@@ -420,6 +423,7 @@ export default function AssignmentsPage() {
               onCardClick={handleCardClick}
               onStatusChange={handleStatusChange}
               onPublish={(a) => setPublishingAssignment(a)}
+              onDeleted={fetchBoard}
             />
           ))}
         </div>

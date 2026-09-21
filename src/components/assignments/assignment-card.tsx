@@ -5,8 +5,20 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { useState } from "react";
+import { toast } from "sonner";
 import {
   Calendar,
   Clock,
@@ -23,6 +35,7 @@ import {
   Film,
   FileEdit,
 } from "lucide-react";
+import { Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 
@@ -205,10 +218,32 @@ interface AssignmentCardProps {
   onClick: () => void;
   onStatusChange: (status: AssignmentStatus) => void;
   onPublish?: () => void;
+  /** Called after the assignment has been deleted, so the board can refresh. */
+  onDeleted?: () => void;
 }
 
-export function AssignmentCard({ assignment, onClick, onStatusChange, onPublish }: AssignmentCardProps) {
+export function AssignmentCard({ assignment, onClick, onStatusChange, onPublish, onDeleted }: AssignmentCardProps) {
   const router = useRouter();
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDelete = async () => {
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/assignments/${assignment.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Kunde inte ta bort uppgiften");
+      }
+      toast.success("Uppgiften borttagen");
+      setConfirmDelete(false);
+      onDeleted?.();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Kunde inte ta bort uppgiften");
+    } finally {
+      setDeleting(false);
+    }
+  };
   const priority = PRIORITY_CONFIG[assignment.priority];
   const isStatic = (assignment.format?.name ?? "").toUpperCase().includes("STATIC");
   const overdue =
@@ -275,9 +310,48 @@ export function AssignmentCard({ assignment, onClick, onStatusChange, onPublish 
                 </DropdownMenuItem>
               );
             })}
+            {onDeleted && (
+              <>
+                <DropdownMenuSeparator className="bg-white/10" />
+                <DropdownMenuItem
+                  onClick={() => setConfirmDelete(true)}
+                  className="text-red-400 focus:text-red-400 focus:bg-red-500/10"
+                >
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  Ta bort
+                </DropdownMenuItem>
+              </>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+
+      <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+        <DialogContent className="w-[96vw] sm:max-w-md bg-[#111827] border-white/10" onClick={(e) => e.stopPropagation()}>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-white">
+              <Trash2 className="h-5 w-5 text-red-400" />
+              Ta bort uppgift
+            </DialogTitle>
+            <DialogDescription className="text-slate-400">
+              {assignment.autoName || assignment.title} tas bort permanent. Tidrapporter kopplas loss men sparas.
+              Det går inte att ångra.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmDelete(false)} disabled={deleting}>
+              Avbryt
+            </Button>
+            <Button
+              className="bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20"
+              onClick={handleDelete}
+              disabled={deleting}
+            >
+              {deleting ? "Tar bort…" : "Ta bort"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Format & Product */}
       <div className="flex items-center gap-2 mb-2 text-xs">
