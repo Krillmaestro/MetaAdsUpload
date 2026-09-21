@@ -42,6 +42,7 @@ export const AREAS: AreaDef[] = [
   { key: "editors", label: "Editors & Bonus", href: "/editors", group: "Team", apis: ["/api/editors", "/api/users", "/api/e", "/api/bank", "/api/fortnox", "/api/adset-owner", "/api/meta"] },
   { key: "scorecards", label: "Scorecards", href: "/scorecards", group: "Team", apis: ["/api/editors", "/api/users"] },
   { key: "options", label: "Options", href: "/options", group: "Team", apis: ["/api/options"] },
+  { key: "lager", label: "Lager", href: "/lager", group: "Analyze", apis: ["/api/lager"] },
   { key: "shopify", label: "Shopify ncROAS", href: "/shopify", group: "Team", apis: ["/api/shopify", "/api/meta"] },
   { key: "settings", label: "Settings", href: "/settings", group: "Team", apis: ["/api/meta", "/api/users", "/api/telegram", "/api/gdrive", "/api/seed"] },
   { key: "time", label: "Time Tracker", href: "/time", group: "Founders", apis: ["/api/time", "/api/work"], founderOnly: true },

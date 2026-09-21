@@ -1043,3 +1043,90 @@ export const logrocketSnapshots = pgTable("logrocket_snapshots", {
     .on(table.source)
     .where(sql`${table.source} = 'seed'`),
 ]);
+
+// ─── Lager (stock tracking & reorder planning) ───────────────────────────────
+
+export const inventoryProducts = pgTable("inventory_products", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  name: text("name").notNull(),
+  code: text("code").notNull(),
+  // Shopify line items are matched on sku first, then on a case-insensitive title substring.
+  matchSkus: jsonb("match_skus").$type<string[]>().default([]).notNull(),
+  matchTitles: jsonb("match_titles").$type<string[]>().default([]).notNull(),
+  unitLabel: text("unit_label").notNull().default("burkar"),
+  leadTimeMinDays: integer("lead_time_min_days").notNull().default(28),
+  leadTimeMaxDays: integer("lead_time_max_days").notNull().default(42),
+  safetyDays: integer("safety_days").notNull().default(7),
+  targetCoverDays: integer("target_cover_days").notNull().default(90),
+  velocityBasisDays: integer("velocity_basis_days").notNull().default(30),
+  moq: integer("moq").notNull().default(0),
+  unitCost: real("unit_cost"),
+  isActive: boolean("is_active").notNull().default(true),
+  sortOrder: integer("sort_order").notNull().default(0),
+  // The one Shopify variant that carries the stock for this product. Duplicate
+  // listings sell against the same physical shelf, so only this one is written to.
+  shopifyVariantId: text("shopify_variant_id"),
+  shopifyInventoryItemId: text("shopify_inventory_item_id"),
+  shopifyLocationId: text("shopify_location_id"),
+  shopifySyncedAt: timestamp("shopify_synced_at"),
+  shopifyLastPushedUnits: integer("shopify_last_pushed_units"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("inventory_products_code_idx").on(table.code),
+]);
+
+export const inventoryShopifyLog = pgTable("inventory_shopify_log", {
+  id: serial("id").primaryKey(),
+  productId: text("product_id").notNull(),
+  direction: text("direction").notNull(), // push | pull | map
+  units: integer("units"),
+  previousUnits: integer("previous_units"),
+  ok: boolean("ok").notNull().default(true),
+  message: text("message"),
+  createdByName: text("created_by_name"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("inventory_shopify_log_product_idx").on(table.productId, table.createdAt),
+]);
+
+export const inventoryCounts = pgTable("inventory_counts", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  productId: text("product_id").notNull(),
+  countedOn: date("counted_on").notNull(),
+  units: integer("units").notNull(),
+  source: text("source").notNull().default("manual"), // manual | shopify
+  note: text("note"),
+  createdByName: text("created_by_name"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("inventory_counts_product_idx").on(table.productId, table.countedOn),
+]);
+
+export const inventoryPurchaseOrders = pgTable("inventory_purchase_orders", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  productId: text("product_id").notNull(),
+  units: integer("units").notNull(),
+  orderedOn: date("ordered_on").notNull(),
+  etaOn: date("eta_on"),
+  receivedOn: date("received_on"),
+  status: text("status").notNull().default("ordered"), // ordered | received | cancelled
+  note: text("note"),
+  createdByName: text("created_by_name"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("inventory_po_product_idx").on(table.productId, table.orderedOn),
+]);
+
+export const inventorySalesDaily = pgTable("inventory_sales_daily", {
+  id: serial("id").primaryKey(),
+  productId: text("product_id").notNull(),
+  soldOn: date("sold_on").notNull(),
+  units: integer("units").notNull(),
+  orders: integer("orders").notNull().default(0),
+  syncedAt: timestamp("synced_at").defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("inventory_sales_daily_key_idx").on(table.productId, table.soldOn),
+  index("inventory_sales_daily_date_idx").on(table.soldOn),
+]);
