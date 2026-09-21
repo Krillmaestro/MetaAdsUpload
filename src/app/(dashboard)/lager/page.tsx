@@ -101,6 +101,7 @@ export default function LagerPage() {
   const [scopes, setScopes] = useState<ScopeState | null>(null);
   const [variants, setVariants] = useState<Variant[]>([]);
   const [locationId, setLocationId] = useState<string | null>(null);
+  const [locationName, setLocationName] = useState<string | null>(null);
   const [shopifyError, setShopifyError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -111,7 +112,7 @@ export default function LagerPage() {
       if (!res.ok) { setShopifyError(j.error || `Shopify svarade ${res.status}`); return; }
       setShopifyError(null);
       setScopes(j.scopes ?? null);
-      if (j.variants) { setVariants(j.variants); setLocationId(j.locationId ?? null); }
+      if (j.variants) { setVariants(j.variants); setLocationId(j.locationId ?? null); setLocationName(j.locationName ?? null); }
     } catch (err) {
       setShopifyError(err instanceof Error ? err.message : "Kunde inte nå Shopify");
     }
@@ -263,7 +264,7 @@ export default function LagerPage() {
 
       <div className="rounded-xl border border-white/5 bg-[#111827] overflow-hidden">
         <div className="p-4 border-b border-white/5 flex items-center justify-between gap-3 flex-wrap">
-          <h3 className="text-sm font-semibold text-white flex items-center gap-2"><Link2 className="h-4 w-4 text-cyan-400" /> Shopify-koppling</h3>
+          <h3 className="text-sm font-semibold text-white flex items-center gap-2"><Link2 className="h-4 w-4 text-cyan-400" /> Shopify-koppling{locationName && <span className="text-[11px] font-normal text-slate-500">· lagerplats {locationName}</span>}</h3>
           {scopes?.canWrite && (
             <div className="flex gap-2">
               <button disabled={busy} onClick={() => shopifyAction({ action: "pull" }, "Saldon hämtade från Shopify")}
