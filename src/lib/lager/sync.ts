@@ -12,24 +12,30 @@ type ShopifyOrder = {
   line_items: ShopifyLineItem[];
 };
 
+/** Vercel env values can carry invisible trailing characters — always trim. */
+const env = (key: string) => (process.env[key] ?? "").trim();
+
 function getStore(): string {
-  const store = process.env.SHOPIFY_STORE;
-  if (!store) throw new Error("Missing SHOPIFY_STORE env var");
+  const store = env("SHOPIFY_STORE");
+  if (!store) throw new Error("SHOPIFY_STORE saknas");
   return store;
 }
 
 async function getAccessToken(): Promise<string> {
-  const permanent = process.env.SHOPIFY_ACCESS_TOKEN;
+  const permanent = env("SHOPIFY_ACCESS_TOKEN");
   if (permanent) return permanent;
-  const clientId = process.env.SHOPIFY_CLIENT_ID;
-  const clientSecret = process.env.SHOPIFY_CLIENT_SECRET;
-  if (!clientId || !clientSecret) throw new Error("Missing Shopify credentials");
+  const clientId = env("SHOPIFY_CLIENT_ID");
+  const clientSecret = env("SHOPIFY_CLIENT_SECRET");
+  if (!clientId || !clientSecret) throw new Error("SHOPIFY_CLIENT_ID/SECRET saknas i miljön");
   const res = await fetch(`https://${getStore()}/admin/oauth/access_token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ grant_type: "client_credentials", client_id: clientId, client_secret: clientSecret }).toString(),
   });
-  if (!res.ok) throw new Error(`Shopify token exchange failed (${res.status})`);
+  if (!res.ok) {
+    const detail = (await res.text()).slice(0, 200);
+    throw new Error(`Shopify nekade inloggningen (${res.status}): ${detail}`);
+  }
   return (await res.json()).access_token as string;
 }
 

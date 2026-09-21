@@ -101,16 +101,20 @@ export default function LagerPage() {
   const [scopes, setScopes] = useState<ScopeState | null>(null);
   const [variants, setVariants] = useState<Variant[]>([]);
   const [locationId, setLocationId] = useState<string | null>(null);
+  const [shopifyError, setShopifyError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const loadShopify = useCallback(async () => {
     try {
       const res = await fetch("/api/lager/shopify?variants=1");
       const j = await res.json();
-      if (!res.ok) return;
+      if (!res.ok) { setShopifyError(j.error || `Shopify svarade ${res.status}`); return; }
+      setShopifyError(null);
       setScopes(j.scopes ?? null);
       if (j.variants) { setVariants(j.variants); setLocationId(j.locationId ?? null); }
-    } catch { /* Shopify-status är frivillig information */ }
+    } catch (err) {
+      setShopifyError(err instanceof Error ? err.message : "Kunde inte nå Shopify");
+    }
   }, []);
   useEffect(() => { loadShopify(); }, [loadShopify]);
 
@@ -273,6 +277,17 @@ export default function LagerPage() {
             </div>
           )}
         </div>
+
+        {shopifyError && (
+          <div className="p-4 border-b border-white/5 bg-red-500/5">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="h-4 w-4 text-red-400 mt-0.5 shrink-0" />
+              <div className="text-xs text-slate-300">
+                <b className="text-red-400">Kommer inte åt Shopify.</b> {shopifyError}
+              </div>
+            </div>
+          </div>
+        )}
 
         {scopes && !scopes.canWrite && (
           <div className="p-4 border-b border-white/5 bg-amber-500/5">
