@@ -66,11 +66,15 @@ async function api<T>(path: string, token: string, init?: RequestInit): Promise<
 
 export async function checkScopes(): Promise<ScopeState> {
   const { scopes } = await tokenAndScopes();
-  const missing = REQUIRED.filter((s) => !scopes.includes(s));
+  // Shopify collapses read_x into write_x when both are requested, so a granted
+  // write_inventory also covers reading stock.
+  const has = (scope: string) =>
+    scopes.includes(scope) || scopes.includes(scope.replace(/^read_/, "write_"));
+  const missing = REQUIRED.filter((s) => !has(s));
   return {
     scopes,
-    canRead: ["read_products", "read_locations", "read_inventory"].every((s) => scopes.includes(s)),
-    canWrite: scopes.includes("write_inventory") && scopes.includes("read_inventory"),
+    canRead: ["read_products", "read_locations", "read_inventory"].every(has),
+    canWrite: has("write_inventory"),
     missing,
   };
 }
