@@ -140,6 +140,8 @@ export default function LagerPage() {
   const [shopifyError, setShopifyError] = useState<string | null>(null);
   /** Coverage period the user is trying out per product, before saving it. */
   const [coverDraft, setCoverDraft] = useState<Record<string, number>>({});
+  /** Extra 512-steps added per product to make the whole order land on full pallets. */
+  const [extraSteps, setExtraSteps] = useState<Record<string, number>>({});
   const [busy, setBusy] = useState(false);
 
   const loadShopify = useCallback(async () => {
@@ -220,7 +222,17 @@ export default function LagerPage() {
                 </div>
                 {(() => {
                   const cover = coverDraft[p.id] ?? p.targetCoverDays;
-                  const sug = suggestFor(p, cover);
+                  const base = suggestFor(p, cover);
+                  const step = p.moq > 0 ? p.moq : 0;
+                  const extra = (extraSteps[p.id] ?? 0) * step;
+                  const units = Math.max(0, base.units + extra);
+                  const after = (p.stock ?? 0) + p.incomingUnits + units;
+                  const sug = {
+                    units,
+                    days: p.velocity > 0 && units > 0 ? after / p.velocity : null,
+                    until: p.velocity > 0 && units > 0 ? shiftDays(new Date().toISOString().slice(0, 10), Math.floor(after / p.velocity)) : null,
+                    cost: p.unitCost ? Math.round(units * p.unitCost) : null,
+                  };
                   const dirty = cover !== p.targetCoverDays;
                   return (
                     <div className="ml-auto flex items-center gap-4">
@@ -261,7 +273,13 @@ export default function LagerPage() {
                         Beställ <b className="text-white tabular-nums">{nf(sug.units)}</b> {p.unitLabel}
                         {sug.cost !== null && <span className="text-slate-500"> · {nf(sug.cost)} kr</span>}
                         {p.moq > 0 && sug.units > 0 && (
-                          <div className="text-xs text-slate-500">{packLabel(sug.units, p.moq)}</div>
+                          <div className="text-xs text-slate-500 flex items-center justify-end gap-1.5">
+                            <button onClick={() => setExtraSteps({ ...extraSteps, [p.id]: (extraSteps[p.id] ?? 0) - 1 })}
+                              className="px-1.5 rounded border border-white/10 text-slate-400 hover:bg-white/[0.05]" title="ett steg mindre">−</button>
+                            {packLabel(sug.units, p.moq)}
+                            <button onClick={() => setExtraSteps({ ...extraSteps, [p.id]: (extraSteps[p.id] ?? 0) + 1 })}
+                              className="px-1.5 rounded border border-white/10 text-slate-400 hover:bg-white/[0.05]" title="ett steg till">+</button>
+                          </div>
                         )}
                         {sug.until && (
                           <div className="text-xs text-slate-500">
@@ -279,6 +297,45 @@ export default function LagerPage() {
               </div>
             ))}
           </div>
+          {(() => {
+            const lines = alerts
+              .filter((p) => p.moq > 0)
+              .map((p) => {
+                const cover = coverDraft[p.id] ?? p.targetCoverDays;
+                const units = Math.max(0, suggestFor(p, cover).units + (extraSteps[p.id] ?? 0) * p.moq);
+                return { p, units, steps: units / p.moq };
+              })
+              .filter((l) => l.units > 0);
+            if (!lines.length) return null;
+            const totalUnits = lines.reduce((n, l) => n + l.units, 0);
+            const totalSteps = Math.round(totalUnits / 512);
+            const missing = (3 - (totalSteps % 3)) % 3;
+            // Put the extra steps where the stock runs out first.
+            const tightest = lines.slice().sort((a, b) => (a.p.daysCover ?? 1e9) - (b.p.daysCover ?? 1e9))[0];
+            return (
+              <div className="p-4 border-t border-white/5 flex items-center gap-4 flex-wrap bg-white/[0.015]">
+                <span className="text-xs text-slate-500 uppercase tracking-wider">Hela ordern</span>
+                <span className="text-sm text-white tabular-nums">{nf(totalUnits)} st</span>
+                <span className="text-sm text-slate-400">{totalSteps} × 512 · {nf(totalUnits / 1536, 2)} pallar</span>
+                {missing === 0 ? (
+                  <span className="px-2 py-1 rounded border text-[11px] bg-emerald-500/10 text-emerald-400 border-emerald-500/20">
+                    hela pallar ✓
+                  </span>
+                ) : (
+                  <>
+                    <span className="px-2 py-1 rounded border text-[11px] bg-amber-500/10 text-amber-400 border-amber-500/20">
+                      {missing} × 512 kvar till hel pall
+                    </span>
+                    <button
+                      onClick={() => setExtraSteps({ ...extraSteps, [tightest.p.id]: (extraSteps[tightest.p.id] ?? 0) + missing })}
+                      className="px-3 py-1.5 rounded-lg bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 hover:bg-cyan-500/20 text-xs">
+                      Lägg {missing} × 512 på {tightest.p.name.split(" ").slice(0, 2).join(" ")}
+                    </button>
+                  </>
+                )}
+              </div>
+            );
+          })()}
         </div>
       )}
 
@@ -493,7 +550,10 @@ export default function LagerPage() {
             </div>
             <div className="p-4">
               {tab === "count" && <CountForm product={p} onSave={save} />}
-              {tab === "po" && <PoForm product={p} onSave={save} />}
+              {tab === "po" && (
+                <PoForm product={p} onSave={save}
+                  presetUnits={Math.max(0, suggestFor(p, coverDraft[p.id] ?? p.targetCoverDays).units + (extraSteps[p.id] ?? 0) * (p.moq || 0))} />
+              )}
               {tab === "settings" && <SettingsForm product={p} onSave={save} />}
             </div>
           </div>
@@ -563,8 +623,8 @@ function CountForm({ product, onSave }: { product: Forecast; onSave: (p: Record<
   );
 }
 
-function PoForm({ product, onSave }: { product: Forecast; onSave: (p: Record<string, unknown>) => Promise<boolean> }) {
-  const [units, setUnits] = useState(String(product.suggestedUnits || ""));
+function PoForm({ product, onSave, presetUnits }: { product: Forecast; onSave: (p: Record<string, unknown>) => Promise<boolean>; presetUnits?: number }) {
+  const [units, setUnits] = useState(String(presetUnits || product.suggestedUnits || ""));
   const [orderedOn, setOrderedOn] = useState(new Date().toISOString().slice(0, 10));
   const [etaOn, setEtaOn] = useState(() => shiftDays(new Date().toISOString().slice(0, 10), product.leadTimeMaxDays));
   return (
