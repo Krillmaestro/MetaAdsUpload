@@ -40,6 +40,21 @@ const shiftDays = (isoDate: string, n: number) => {
   return d.toISOString().slice(0, 10);
 };
 
+/**
+ * A pallet holds 1 536 jars and only splits in three, so 512 is the smallest step.
+ * Show the order both as steps and as pallets, which is how the factory ships it.
+ */
+const PALLET = 1536;
+function packLabel(units: number, step: number) {
+  const steps = Math.round(units / step);
+  if (step !== 512) return `${steps} × ${nf(step)}`;
+  const pallets = units / PALLET;
+  const whole = Math.floor(pallets);
+  const thirds = Math.round((pallets - whole) * 3);
+  const pal = whole === 0 ? `${thirds}/3 pall` : thirds === 0 ? `${whole} ${whole === 1 ? "pall" : "pallar"}` : `${whole} ${whole === 1 ? "pall" : "pallar"} + ${thirds}/3`;
+  return `${steps} × 512 · ${pal}`;
+}
+
 /** Whole days from today to an ISO date (negative if it has passed). */
 const daysUntil = (isoDate: string) =>
   Math.round((new Date(isoDate + "T00:00:00").getTime() - new Date(new Date().toISOString().slice(0, 10) + "T00:00:00").getTime()) / 86400000);
@@ -245,6 +260,9 @@ export default function LagerPage() {
                       <div className="text-sm text-slate-300 text-right min-w-[150px]">
                         Beställ <b className="text-white tabular-nums">{nf(sug.units)}</b> {p.unitLabel}
                         {sug.cost !== null && <span className="text-slate-500"> · {nf(sug.cost)} kr</span>}
+                        {p.moq > 0 && sug.units > 0 && (
+                          <div className="text-xs text-slate-500">{packLabel(sug.units, p.moq)}</div>
+                        )}
                         {sug.until && (
                           <div className="text-xs text-slate-500">
                             räcker till {dateSv(sug.until)} · {nf((sug.days ?? 0) / 30, 1)} mån
@@ -447,7 +465,8 @@ export default function LagerPage() {
           </table>
         </div>
         <div className="p-3 border-t border-white/5 text-[11px] text-slate-600">
-          Förslaget täcker leveranstiden plus den period du valt per produkt, minus det du har och det som är på väg.
+          Förslaget täcker leveranstiden plus den period du valt per produkt, minus det du har och det som är på väg, och rundas upp till närmaste
+          hela steg — en pall rymmer 1 536 burkar och delas bara i tre, så 512 är minsta beställningsbara mängd.
           Kolumnen &quot;Räcker till&quot; är datumet lagret tar slut om du lägger ordern i dag och förbrukningen står still.
         </div>
         <div className="p-3 border-t border-white/5 text-[11px] text-slate-600">
@@ -587,7 +606,7 @@ function SettingsForm({ product, onSave }: { product: Forecast; onSave: (p: Reco
           <select className={inputCls} value={f.velocityBasisDays} onChange={set("velocityBasisDays")}>
             <option value="7">7 dagar</option><option value="14">14 dagar</option><option value="30">30 dagar</option><option value="60">60 dagar</option>
           </select></div>
-        <div><label className={labelCls}>MOQ</label><input className={inputCls} type="number" value={f.moq} onChange={set("moq")} /></div>
+        <div><label className={labelCls}>Steg (st)</label><input className={inputCls} type="number" value={f.moq} onChange={set("moq")} placeholder="512" /></div>
         <div><label className={labelCls}>Inköpspris</label><input className={inputCls} type="number" step="0.01" value={f.unitCost} onChange={set("unitCost")} /></div>
       </div>
       <button className={btnCls} onClick={() => onSave({ type: "settings", productId: product.id, ...f })}>
