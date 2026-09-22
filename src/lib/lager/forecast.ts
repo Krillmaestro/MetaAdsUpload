@@ -38,6 +38,11 @@ export type ProductForecast = {
   orderByOn: string | null;
   suggestedUnits: number;
   suggestedCost: number | null;
+  /** How long the suggested order lasts, counted from today, and the date it runs out. */
+  suggestedCoversDays: number | null;
+  suggestedUntil: string | null;
+  /** "rising" when the last week runs well above the basis — then the order is undersized. */
+  pace: "rising" | "falling" | "steady";
   status: "order_now" | "soon" | "ok" | "needs_count" | "no_sales";
   salesDays: { date: string; units: number }[];
   shopifyVariantId: string | null;
@@ -126,6 +131,12 @@ export async function buildForecast(): Promise<{ products: ProductForecast[]; ge
     let suggestedUnits = Math.max(0, Math.ceil(rawSuggested));
     if (p.moq > 0 && suggestedUnits > 0) suggestedUnits = Math.ceil(suggestedUnits / p.moq) * p.moq;
 
+    const afterOrder = (stock ?? 0) + incomingUnits + suggestedUnits;
+    const suggestedCoversDays = velocity > 0 && suggestedUnits > 0 ? afterOrder / velocity : null;
+    const suggestedUntil = suggestedCoversDays !== null ? addDays(today, Math.floor(suggestedCoversDays)) : null;
+    const pace: ProductForecast["pace"] =
+      v30 <= 0 ? "steady" : v7 > v30 * 1.15 ? "rising" : v7 < v30 * 0.6 ? "falling" : "steady";
+
     let status: ProductForecast["status"];
     if (velocity <= 0) status = "no_sales";
     else if (stock === null) status = "needs_count";
@@ -152,6 +163,7 @@ export async function buildForecast(): Promise<{ products: ProductForecast[]; ge
       daysCover, stockoutOn, reorderPoint, orderInDays, orderByOn,
       suggestedUnits,
       suggestedCost: p.unitCost ? Math.round(suggestedUnits * p.unitCost) : null,
+      suggestedCoversDays, suggestedUntil, pace,
       status, salesDays,
       shopifyVariantId: p.shopifyVariantId, shopifyInventoryItemId: p.shopifyInventoryItemId,
       shopifyLocationId: p.shopifyLocationId,

@@ -13,6 +13,7 @@ type Forecast = {
   incomingUnits: number; nextEta: string | null;
   daysCover: number | null; stockoutOn: string | null; reorderPoint: number;
   orderInDays: number | null; orderByOn: string | null; suggestedUnits: number; suggestedCost: number | null;
+  suggestedCoversDays: number | null; suggestedUntil: string | null; pace: "rising" | "falling" | "steady";
   status: "order_now" | "soon" | "ok" | "needs_count" | "no_sales";
   salesDays: { date: string; units: number }[];
   shopifyVariantId: string | null; shopifyInventoryItemId: string | null; shopifyLocationId: string | null;
@@ -181,9 +182,14 @@ export default function LagerPage() {
                   Lägg order senast <b className={p.status === "order_now" ? "text-red-400" : "text-amber-400"}>{dateSv(p.orderByOn)}</b>
                   {p.stockoutOn && <span className="text-slate-500"> · slut {dateSv(p.stockoutOn)}</span>}
                 </div>
-                <div className="ml-auto text-sm text-slate-300">
-                  Föreslaget: <b className="text-white tabular-nums">{nf(p.suggestedUnits)}</b> {p.unitLabel}
+                <div className="ml-auto text-sm text-slate-300 text-right">
+                  Beställ <b className="text-white tabular-nums">{nf(p.suggestedUnits)}</b> {p.unitLabel}
                   {p.suggestedCost !== null && <span className="text-slate-500"> · {nf(p.suggestedCost)} kr</span>}
+                  {p.suggestedUntil && (
+                    <div className="text-xs text-slate-500">
+                      räcker till {dateSv(p.suggestedUntil)} · {nf((p.suggestedCoversDays ?? 0) / 30, 1)} mån
+                    </div>
+                  )}
                 </div>
                 <button onClick={() => { setOpenId(p.id); setTab("po"); }}
                   className="px-3 py-1.5 rounded-lg bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 hover:bg-cyan-500/20 text-xs flex items-center gap-1.5">
@@ -213,6 +219,7 @@ export default function LagerPage() {
                 <th className="text-left text-[10px] text-slate-500 uppercase tracking-wider px-4 py-2">Beställ senast</th>
                 <th className="text-right text-[10px] text-slate-500 uppercase tracking-wider px-4 py-2">På väg</th>
                 <th className="text-right text-[10px] text-slate-500 uppercase tracking-wider px-4 py-2">Förslag</th>
+                <th className="text-left text-[10px] text-slate-500 uppercase tracking-wider px-4 py-2">Räcker till</th>
                 <th className="text-left text-[10px] text-slate-500 uppercase tracking-wider px-4 py-2">Status</th>
                 <th className="px-4 py-2" />
               </tr>
@@ -225,6 +232,16 @@ export default function LagerPage() {
                     <div className="text-[11px] text-slate-600">
                       {p.countedOn ? `räknat ${dateSv(p.countedOn)}: ${nf(p.countUnits ?? 0)} − ${nf(p.soldSinceCount)} sålda${p.receivedSinceCount ? ` + ${nf(p.receivedSinceCount)} mottagna` : ""}` : "inget saldo registrerat"}
                     </div>
+                    {p.pace === "rising" && (
+                      <div className="text-[10px] text-amber-400 mt-0.5">
+                        går {nf((p.v7 / p.v30 - 1) * 100)} % snabbare senaste veckan än snittet — ordern räcker kortare än datumet säger
+                      </div>
+                    )}
+                    {p.pace === "falling" && (
+                      <div className="text-[10px] text-slate-500 mt-0.5">
+                        nästan stillastående senaste veckan — siffran bygger på en period då annonserna låg nere
+                      </div>
+                    )}
                   </td>
                   <td className="px-4 py-2.5 text-right tabular-nums text-white">{p.stock !== null ? nf(p.stock) : "–"}</td>
                   <td className="px-4 py-2.5 text-right tabular-nums text-slate-300">{nf(p.velocity, 1)}</td>
@@ -245,6 +262,9 @@ export default function LagerPage() {
                     {p.incomingUnits ? <>{nf(p.incomingUnits)}<div className="text-[10px] text-slate-600">ETA {dateSv(p.nextEta)}</div></> : "–"}
                   </td>
                   <td className="px-4 py-2.5 text-right tabular-nums text-white">{p.suggestedUnits ? nf(p.suggestedUnits) : "–"}</td>
+                  <td className="px-4 py-2.5 text-xs text-slate-400">
+                    {p.suggestedUntil ? <>{dateSv(p.suggestedUntil)}<div className="text-[10px] text-slate-600">{nf((p.suggestedCoversDays ?? 0) / 30, 1)} mån efter {p.targetCoverDays} d täckning</div></> : "–"}
+                  </td>
                   <td className="px-4 py-2.5">
                     <span className={`inline-block px-2 py-0.5 rounded border text-[11px] ${STATUS[p.status].cls}`}>{STATUS[p.status].label}</span>
                   </td>
@@ -362,6 +382,10 @@ export default function LagerPage() {
               })}
             </tbody>
           </table>
+        </div>
+        <div className="p-3 border-t border-white/5 text-[11px] text-slate-600">
+          Förslaget täcker leveranstiden plus den period du valt per produkt, minus det du har och det som är på väg.
+          Kolumnen &quot;Räcker till&quot; är datumet lagret tar slut om du lägger ordern i dag och förbrukningen står still.
         </div>
         <div className="p-3 border-t border-white/5 text-[11px] text-slate-600">
           Flera Shopify-listningar kan sälja mot samma fysiska lager — koppla bara den variant som faktiskt spårar kvantitet.
