@@ -40,6 +40,25 @@ const shiftDays = (isoDate: string, n: number) => {
   return d.toISOString().slice(0, 10);
 };
 
+/** Whole days from today to an ISO date (negative if it has passed). */
+const daysUntil = (isoDate: string) =>
+  Math.round((new Date(isoDate + "T00:00:00").getTime() - new Date(new Date().toISOString().slice(0, 10) + "T00:00:00").getTime()) / 86400000);
+
+/**
+ * Recompute the suggestion for a different coverage period without a round trip,
+ * using the same formula as the server: cover the lead time plus the chosen period,
+ * minus what is on the shelf and what is already on its way.
+ */
+function suggestFor(p: Forecast, coverDays: number) {
+  const raw = p.velocity * (coverDays + p.leadTimeMaxDays) - (p.stock ?? 0) - p.incomingUnits;
+  let units = Math.max(0, Math.ceil(raw));
+  if (p.moq > 0 && units > 0) units = Math.ceil(units / p.moq) * p.moq;
+  const after = (p.stock ?? 0) + p.incomingUnits + units;
+  const days = p.velocity > 0 && units > 0 ? after / p.velocity : null;
+  const until = days !== null ? shiftDays(new Date().toISOString().slice(0, 10), Math.floor(days)) : null;
+  return { units, days, until, cost: p.unitCost ? Math.round(units * p.unitCost) : null };
+}
+
 const STATUS: Record<Forecast["status"], { label: string; cls: string; dot: string }> = {
   order_now: { label: "Beställ nu", cls: "bg-red-500/10 text-red-400 border-red-500/20", dot: "bg-red-400" },
   soon: { label: "Beställ snart", cls: "bg-amber-500/10 text-amber-400 border-amber-500/20", dot: "bg-amber-400" },
@@ -104,6 +123,8 @@ export default function LagerPage() {
   const [locationId, setLocationId] = useState<string | null>(null);
   const [locationName, setLocationName] = useState<string | null>(null);
   const [shopifyError, setShopifyError] = useState<string | null>(null);
+  /** Coverage period the user is trying out per product, before saving it. */
+  const [coverDraft, setCoverDraft] = useState<Record<string, number>>({});
   const [busy, setBusy] = useState(false);
 
   const loadShopify = useCallback(async () => {
@@ -182,16 +203,58 @@ export default function LagerPage() {
                   Lägg order senast <b className={p.status === "order_now" ? "text-red-400" : "text-amber-400"}>{dateSv(p.orderByOn)}</b>
                   {p.stockoutOn && <span className="text-slate-500"> · slut {dateSv(p.stockoutOn)}</span>}
                 </div>
-                <div className="ml-auto text-sm text-slate-300 text-right">
-                  Beställ <b className="text-white tabular-nums">{nf(p.suggestedUnits)}</b> {p.unitLabel}
-                  {p.suggestedCost !== null && <span className="text-slate-500"> · {nf(p.suggestedCost)} kr</span>}
-                  {p.suggestedUntil && (
-                    <div className="text-xs text-slate-500">
-                      räcker till {dateSv(p.suggestedUntil)} · {nf((p.suggestedCoversDays ?? 0) / 30, 1)} mån
+                {(() => {
+                  const cover = coverDraft[p.id] ?? p.targetCoverDays;
+                  const sug = suggestFor(p, cover);
+                  const dirty = cover !== p.targetCoverDays;
+                  return (
+                    <div className="ml-auto flex items-center gap-4">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[11px] text-slate-500">Ska räcka</span>
+                        {[45, 60, 90, 120].map((d) => (
+                          <button key={d} onClick={() => setCoverDraft({ ...coverDraft, [p.id]: d })}
+                            className={`px-2 py-1 rounded text-[11px] border transition-all ${cover === d
+                              ? "bg-cyan-500/10 text-cyan-400 border-cyan-500/20"
+                              : "text-slate-400 border-white/5 hover:bg-white/[0.03]"}`}>
+                            {d} d
+                          </button>
+                        ))}
+                        <input type="number" min="7" max="365" value={cover}
+                          onChange={(e) => setCoverDraft({ ...coverDraft, [p.id]: Math.max(7, Number(e.target.value) || 0) })}
+                          className="w-16 px-2 py-1 rounded bg-[#0a0e1a] border border-white/10 text-[11px] text-white focus:border-cyan-500/40 focus:outline-none" />
+                        <span className="text-[11px] text-slate-600">el. till</span>
+                        <input type="date" value={sug.until ?? ""} min={new Date().toISOString().slice(0, 10)}
+                          onChange={(e) => {
+                            const d = e.target.value;
+                            if (!d) return;
+                            // The coverage window starts when the order lands, so subtract the lead time.
+                            setCoverDraft({ ...coverDraft, [p.id]: Math.max(0, daysUntil(d) - p.leadTimeMaxDays) });
+                          }}
+                          className="px-2 py-1 rounded bg-[#0a0e1a] border border-white/10 text-[11px] text-white focus:border-cyan-500/40 focus:outline-none" />
+                        {dirty && (
+                          <button
+                            onClick={async () => {
+                              await save({ type: "settings", productId: p.id, targetCoverDays: cover });
+                              setCoverDraft({ ...coverDraft, [p.id]: cover });
+                            }}
+                            className="px-2 py-1 rounded text-[11px] bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 hover:bg-cyan-500/20">
+                            Spara
+                          </button>
+                        )}
+                      </div>
+                      <div className="text-sm text-slate-300 text-right min-w-[150px]">
+                        Beställ <b className="text-white tabular-nums">{nf(sug.units)}</b> {p.unitLabel}
+                        {sug.cost !== null && <span className="text-slate-500"> · {nf(sug.cost)} kr</span>}
+                        {sug.until && (
+                          <div className="text-xs text-slate-500">
+                            räcker till {dateSv(sug.until)} · {nf((sug.days ?? 0) / 30, 1)} mån
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  )}
-                </div>
-                <button onClick={() => { setOpenId(p.id); setTab("po"); }}
+                  );
+                })()}
+                <button onClick={() => { setCoverDraft({ ...coverDraft, [p.id]: coverDraft[p.id] ?? p.targetCoverDays }); setOpenId(p.id); setTab("po"); }}
                   className="px-3 py-1.5 rounded-lg bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 hover:bg-cyan-500/20 text-xs flex items-center gap-1.5">
                   <Plus className="h-3.5 w-3.5" /> Registrera order
                 </button>
