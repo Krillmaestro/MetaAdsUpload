@@ -142,6 +142,8 @@ export default function LagerPage() {
   const [coverDraft, setCoverDraft] = useState<Record<string, number>>({});
   /** Extra 512-steps added per product to make the whole order land on full pallets. */
   const [extraSteps, setExtraSteps] = useState<Record<string, number>>({});
+  /** Products the user has taken out of this order. */
+  const [excluded, setExcluded] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
 
   const loadShopify = useCallback(async () => {
@@ -201,7 +203,7 @@ export default function LagerPage() {
         </div>
       )}
 
-      {alerts.length > 0 && (
+      {(alerts.length > 0 || products.some((p) => p.moq > 0 && p.suggestedUnits > 0)) && (
         <div className="rounded-xl border border-white/5 bg-[#111827] overflow-hidden">
           <div className="p-4 border-b border-white/5">
             <h3 className="text-sm font-semibold text-white flex items-center gap-2"><AlertTriangle className="h-4 w-4 text-amber-400" /> Att beställa</h3>
@@ -298,8 +300,10 @@ export default function LagerPage() {
             ))}
           </div>
           {(() => {
-            const lines = alerts
-              .filter((p) => p.moq > 0)
+            // Everything with a suggestion can go in the order, not just what is flagged —
+            // filling the pallets with a product you need soon is cheaper than a second shipment.
+            const lines = products
+              .filter((p) => p.moq > 0 && !excluded[p.id])
               .map((p) => {
                 const cover = coverDraft[p.id] ?? p.targetCoverDays;
                 const units = Math.max(0, suggestFor(p, cover).units + (extraSteps[p.id] ?? 0) * p.moq);
@@ -317,6 +321,22 @@ export default function LagerPage() {
                 <span className="text-xs text-slate-500 uppercase tracking-wider">Hela ordern</span>
                 <span className="text-sm text-white tabular-nums">{nf(totalUnits)} st</span>
                 <span className="text-sm text-slate-400">{totalSteps} × 512 · {nf(totalUnits / 1536, 2)} pallar</span>
+                <span className="flex items-center gap-1 flex-wrap">
+                  {lines.map((l) => (
+                    <button key={l.p.id} onClick={() => setExcluded({ ...excluded, [l.p.id]: true })}
+                      title="ta bort ur ordern"
+                      className="px-2 py-0.5 rounded border border-white/10 text-[11px] text-slate-400 hover:text-red-400 hover:border-red-500/30">
+                      {l.p.code} {nf(l.units)} ×
+                    </button>
+                  ))}
+                  {products.filter((p) => p.moq > 0 && excluded[p.id]).map((p) => (
+                    <button key={p.id} onClick={() => setExcluded({ ...excluded, [p.id]: false })}
+                      title="lägg till i ordern"
+                      className="px-2 py-0.5 rounded border border-dashed border-white/10 text-[11px] text-slate-600 hover:text-cyan-400">
+                      + {p.code}
+                    </button>
+                  ))}
+                </span>
                 {missing === 0 ? (
                   <span className="px-2 py-1 rounded border text-[11px] bg-emerald-500/10 text-emerald-400 border-emerald-500/20">
                     hela pallar ✓
