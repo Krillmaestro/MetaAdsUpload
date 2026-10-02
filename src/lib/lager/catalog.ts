@@ -26,7 +26,7 @@ export const DEFAULT_CATALOG: CatalogSeed[] = [
   { code: "PRO", name: "3-i-1 Probiotika", matchSkus: ["1", "1D", "1E"], matchTitles: ["probiotika"], unitLabel: "burkar", sortOrder: 10 },
   { code: "KLA", name: "Quercetin+ (Klåda & Allergi)", matchSkus: ["5"], matchTitles: ["klåda & allergi", "quercetin+", "hud+ tuggor"], unitLabel: "burkar", sortOrder: 20 },
   { code: "MUN", name: "MUNHÄLSA+ hund", matchSkus: ["2"], matchTitles: ["munhälsa"], unitLabel: "burkar", sortOrder: 30 },
-  { code: "CLM", name: "Calming Chews", matchSkus: ["7"], matchTitles: ["calming chews", "daglig+ tuggor"], unitLabel: "burkar", sortOrder: 40 },
+  { code: "CLM", name: "Relax+ (Calming Chews)", matchSkus: ["7"], matchTitles: ["calming chews", "daglig+ tuggor", "relax+ tuggor"], unitLabel: "burkar", sortOrder: 40 },
   { code: "SC", name: "Skin & Coat", matchSkus: ["6"], matchTitles: ["skin & coat"], unitLabel: "burkar", sortOrder: 50 },
   { code: "LT", name: "Ledtillskott", matchSkus: ["4"], matchTitles: ["ledtillskott"], unitLabel: "burkar", sortOrder: 60 },
   { code: "BEL", name: "Belöningsbitar+ Kalkon (gåva)", matchSkus: ["8", "8B"], matchTitles: ["belöningsbitar"], unitLabel: "påsar", sortOrder: 70 },
