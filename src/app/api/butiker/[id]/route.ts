@@ -19,12 +19,15 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   if (!isElevated(session.user)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   const { id } = await params;
-  const events = await db
-    .select()
-    .from(schema.retailLeadEvents)
-    .where(eq(schema.retailLeadEvents.leadId, id))
-    .orderBy(desc(schema.retailLeadEvents.createdAt));
-  return NextResponse.json({ events });
+  const [events, emails] = await Promise.all([
+    db.select().from(schema.retailLeadEvents)
+      .where(eq(schema.retailLeadEvents.leadId, id))
+      .orderBy(desc(schema.retailLeadEvents.createdAt)),
+    db.select().from(schema.retailLeadEmails)
+      .where(eq(schema.retailLeadEmails.leadId, id))
+      .orderBy(desc(schema.retailLeadEmails.sentAt)),
+  ]);
+  return NextResponse.json({ events, emails });
 }
 
 /**
@@ -33,6 +36,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
  *   action "status" — set the status directly (prov skickat, kund …)
  *   action "note"   — add a note to the history
  *   action "edit"   — change contact fields, owner or follow-up date
+ *   action "email"  — log a mail exactly as it was sent (or a reply that came in)
  */
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -87,6 +91,46 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       const [row] = await db.update(L).set({ lastNote: note, updatedAt: new Date() }).where(eq(L.id, id)).returning();
       await db.insert(schema.retailLeadEvents).values({ leadId: id, kind: "note", note, byName: who });
       return NextResponse.json({ saved: true, lead: row });
+    }
+
+    if (b.action === "email") {
+      const subject = typeof b.subject === "string" ? b.subject.trim() : "";
+      const body = typeof b.body === "string" ? b.body.replace(/\r\n/g, "\n").trim() : "";
+      if (!subject || !body) return NextResponse.json({ error: "Mejlet behöver ämne och text" }, { status: 400 });
+      const direction = b.direction === "in" ? "in" : "ut";
+      const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+
+      let templateName: string | null = null;
+      let templateVersion: number | null = null;
+      const templateId = str(b.templateId);
+      if (templateId) {
+        const [tpl] = await db.select().from(schema.retailEmailTemplates).where(eq(schema.retailEmailTemplates.id, templateId));
+        if (!tpl) return NextResponse.json({ error: "Mallen finns inte" }, { status: 400 });
+        templateName = tpl.name;
+        templateVersion = typeof b.templateVersion === "number" ? b.templateVersion : tpl.version;
+      }
+      const sentAt = str(b.sentAt) ? new Date(b.sentAt) : new Date();
+
+      const [mail] = await db.insert(schema.retailLeadEmails).values({
+        leadId: id, direction, fromAddress: str(b.from), toAddress: str(b.to), subject, body,
+        templateId, templateName, templateVersion, sentAt, byName: who,
+      }).returning();
+
+      // An outgoing first mail moves a fresh or consented shop to "Mejl skickat" with a follow-up in 4 days.
+      const moves = direction === "ut" && ["ny", "mejla_villkor"].includes(lead.status);
+      const [row] = await db.update(L).set({
+        status: moves ? "mejlad" : lead.status,
+        lastContactAt: sentAt,
+        nextActionOn: moves ? plusDays(4) : lead.nextActionOn,
+        ownerName: lead.ownerName ?? who,
+        updatedAt: new Date(),
+      }).where(eq(L.id, id)).returning();
+      await db.insert(schema.retailLeadEvents).values({
+        leadId: id, kind: "email", outcome: direction,
+        note: `${direction === "in" ? "Svar från" : "Till"} ${mail.toAddress && direction === "ut" ? mail.toAddress : mail.fromAddress ?? "okänd"}: ${subject}`,
+        byName: who,
+      });
+      return NextResponse.json({ saved: true, lead: row, email: mail });
     }
 
     if (b.action === "edit") {

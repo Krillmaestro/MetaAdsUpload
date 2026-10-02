@@ -1185,3 +1185,38 @@ export const retailLeadEvents = pgTable("retail_lead_events", {
 }, (table) => [
   index("retail_lead_events_lead_idx").on(table.leadId, table.createdAt),
 ]);
+
+// Mejlmallar till butikerna. Varje ändring höjer versionen; det som faktiskt
+// skickades sparas ordagrant i retail_lead_emails, så historiken påverkas inte.
+export const retailEmailTemplates = pgTable("retail_email_templates", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  name: text("name").notNull(),
+  subject: text("subject").notNull(),
+  body: text("body").notNull(),
+  version: integer("version").notNull().default(1),
+  state: text("state").notNull().default("utkast"), // utkast | aktiv | arkiverad
+  notes: text("notes"),
+  updatedBy: text("updated_by"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+// Exakt vad som skickades till (eller kom från) en butik.
+export const retailLeadEmails = pgTable("retail_lead_emails", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  leadId: text("lead_id").notNull(),
+  direction: text("direction").notNull().default("ut"), // ut | in
+  fromAddress: text("from_address"),
+  toAddress: text("to_address"),
+  subject: text("subject").notNull(),
+  body: text("body").notNull(),
+  templateId: text("template_id"),
+  templateName: text("template_name"),
+  templateVersion: integer("template_version"),
+  sentAt: timestamp("sent_at").defaultNow().notNull(),
+  byName: text("by_name"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("retail_lead_emails_lead_idx").on(table.leadId, table.sentAt),
+  index("retail_lead_emails_template_idx").on(table.templateId),
+]);

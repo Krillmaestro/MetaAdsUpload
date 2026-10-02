@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { isElevated } from "@/lib/access";
 import { db, schema } from "@/db";
-import { desc } from "drizzle-orm";
+import { desc, sql } from "drizzle-orm";
 import { dedupeKey } from "@/lib/butiker/status";
 
 export const dynamic = "force-dynamic";
@@ -14,11 +14,18 @@ export async function GET() {
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     if (!isElevated(session.user)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
-    const [leads, events] = await Promise.all([
+    const E = schema.retailLeadEmails;
+    const [leads, events, mailStats] = await Promise.all([
       db.select().from(schema.retailLeads).orderBy(schema.retailLeads.county, schema.retailLeads.city, schema.retailLeads.name),
       db.select().from(schema.retailLeadEvents).orderBy(desc(schema.retailLeadEvents.createdAt)).limit(300),
+      db.select({
+        leadId: E.leadId,
+        sent: sql<number>`count(*) filter (where ${E.direction} = 'ut')::int`,
+        replies: sql<number>`count(*) filter (where ${E.direction} = 'in')::int`,
+        lastAt: sql<string>`max(${E.sentAt})`,
+      }).from(E).groupBy(E.leadId),
     ]);
-    return NextResponse.json({ leads, events, me: session.user.name ?? session.user.email ?? null });
+    return NextResponse.json({ leads, events, mailStats, me: session.user.name ?? session.user.email ?? null });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Kunde inte läsa butikerna" }, { status: 500 });
   }

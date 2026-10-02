@@ -1,9 +1,10 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
-import { Store, RefreshCw, AlertTriangle, Plus, Phone, Mail, Globe, Download, Search, ChevronDown, ChevronRight, X, History } from "lucide-react";
+import { Store, RefreshCw, AlertTriangle, Plus, Phone, Mail, Globe, Download, Search, ChevronDown, ChevronRight, X, History, Send, Inbox, FileText, List } from "lucide-react";
 import { toast } from "sonner";
 import { LEAD_STATUSES, CALL_OUTCOMES, statusMeta } from "@/lib/butiker/status";
+import { MallarView } from "./mallar-view";
 
 type Lead = {
   id: string; name: string; type: string | null; address: string | null; postalCode: string | null;
@@ -13,7 +14,13 @@ type Lead = {
   createdAt: string; updatedAt: string;
 };
 type LeadEvent = { id: string; leadId: string; kind: string; outcome: string | null; note: string | null; byName: string | null; createdAt: string };
-type Payload = { leads: Lead[]; events: LeadEvent[]; me: string | null };
+type LeadEmail = {
+  id: string; leadId: string; direction: string; fromAddress: string | null; toAddress: string | null;
+  subject: string; body: string; templateId: string | null; templateName: string | null; templateVersion: number | null;
+  sentAt: string; byName: string | null;
+};
+type MailStat = { leadId: string; sent: number; replies: number; lastAt: string | null };
+type Payload = { leads: Lead[]; events: LeadEvent[]; mailStats?: MailStat[]; me: string | null };
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
 const dateSv = (s: string | null) => (s ? new Date(s.length === 10 ? s + "T00:00:00" : s).toLocaleDateString("sv-SE", { day: "numeric", month: "short" }) : "–");
@@ -24,6 +31,8 @@ const telHref = (p: string) => `tel:${firstPhone(p).replace(/[^\d+]/g, "")}`;
 const webHref = (w: string) => (w.startsWith("http") ? w : `https://${w}`);
 /** Enskild firma counts as a private person: no sales email without consent. */
 const isEF = (l: Lead) => /enskild|^ef$/i.test(l.companyForm ?? "");
+const eventVerb = (e: LeadEvent) =>
+  e.kind === "call" ? "ringde" : e.kind === "status" ? "ändrade" : e.kind === "email" ? (e.outcome === "in" ? "fick svar från" : "mejlade") : "skrev om";
 const outcomeLabel = (k: string | null) => CALL_OUTCOMES.find((o) => o.key === k)?.label ?? statusMeta(k ?? "ny").label;
 const PAGE = 150;
 
@@ -38,7 +47,10 @@ export default function ButikerPage() {
   const [onlyPhone, setOnlyPhone] = useState(false);
   const [limit, setLimit] = useState(PAGE);
   const [open, setOpen] = useState<string | null>(null);
+  const [view, setView] = useState<"lista" | "mallar">("lista");
   const [history, setHistory] = useState<Record<string, LeadEvent[]>>({});
+  const [mails, setMails] = useState<Record<string, LeadEmail[]>>({});
+  const [openMail, setOpenMail] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState<Record<string, string>>({});
   const [nextDraft, setNextDraft] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
@@ -103,11 +115,16 @@ export default function ButikerPage() {
   }, [data, today]);
 
   const leadName = useMemo(() => new Map(leads.map((l) => [l.id, l])), [leads]);
+  const mailStat = useMemo(() => new Map((data?.mailStats ?? []).map((m) => [m.leadId, m])), [data]);
+  const mailedShops = data?.mailStats?.filter((m) => m.sent > 0).length ?? 0;
 
   async function loadHistory(id: string) {
     const res = await fetch(`/api/butiker/${id}`, { cache: "no-store" });
     const json = await res.json();
-    if (res.ok) setHistory((h) => ({ ...h, [id]: json.events }));
+    if (res.ok) {
+      setHistory((h) => ({ ...h, [id]: json.events }));
+      setMails((m) => ({ ...m, [id]: json.emails ?? [] }));
+    }
   }
 
   function toggle(id: string) {
@@ -199,7 +216,19 @@ export default function ButikerPage() {
         </div>
       )}
 
-      {adding && (
+      <div className="flex gap-1 border-b border-white/5">
+        {([["lista", "Ringlista", List], ["mallar", "Mejlmallar", FileText]] as const).map(([k, label, Icon]) => (
+          <button key={k} onClick={() => setView(k)}
+            className={`px-3 py-2 text-sm flex items-center gap-2 border-b-2 -mb-px ${view === k ? "border-cyan-400 text-white" : "border-transparent text-slate-500 hover:text-slate-300"}`}>
+            <Icon className="h-4 w-4" /> {label}
+            {k === "mallar" && mailedShops > 0 && <span className="text-[11px] text-slate-500">{mailedShops} mejlade butiker</span>}
+          </button>
+        ))}
+      </div>
+
+      {view === "mallar" && <MallarView example={leads.find((l) => isEF(l) && l.email) ?? leads[0] ?? null} />}
+
+      {view === "lista" && adding && (
         <div className="rounded-xl border border-white/5 bg-[#111827] p-4 space-y-3">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
             <input className={input} placeholder="Butikens namn *" value={newLead.name} onChange={(e) => setNewLead({ ...newLead, name: e.target.value })} />
@@ -217,6 +246,7 @@ export default function ButikerPage() {
         </div>
       )}
 
+      {view === "lista" && <>
       {/* Pipeline: click a stage to filter on it */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-10 gap-2">
         <button onClick={() => setStatus("")}
@@ -289,7 +319,7 @@ export default function ButikerPage() {
                           <div className="text-white font-medium">{l.name}</div>
                           <div className="text-[11px] text-slate-500">
                             {[l.type, l.brands && `säljer ${l.brands}`].filter(Boolean).join(" · ")}
-                            {isEF(l) && <span className="ml-1 text-amber-400">· EF – ring, mejla inte</span>}
+                            {isEF(l) && <span className="ml-1 text-amber-400">· EF – mejla bara med samtycke</span>}
                           </div>
                         </td>
                         <td className="px-3 py-2 text-slate-300 whitespace-nowrap">
@@ -310,6 +340,9 @@ export default function ButikerPage() {
                         </td>
                         <td className="px-3 py-2 text-xs text-slate-400 whitespace-nowrap">
                           {l.lastContactAt ? <>{dateSv(l.lastContactAt)} · {l.callCount} samtal<div className="text-slate-500">{l.ownerName}</div></> : "–"}
+                          {(mailStat.get(l.id)?.sent ?? 0) > 0 && (
+                            <div className="flex items-center gap-1 text-blue-300"><Send className="h-3 w-3" />{mailStat.get(l.id)!.sent} mejl{(mailStat.get(l.id)?.replies ?? 0) > 0 && <span className="text-emerald-300"> · {mailStat.get(l.id)!.replies} svar</span>}</div>
+                          )}
                         </td>
                         <td className={`px-3 py-2 text-xs whitespace-nowrap ${overdue ? "text-red-400" : "text-slate-400"}`}>{dateSv(l.nextActionOn)}</td>
                       </tr>
@@ -349,6 +382,35 @@ export default function ButikerPage() {
                                   <div>Bolagsform: {l.companyForm ?? "okänd (behandla som EF)"} · Källa: {l.source ?? "–"}</div>
                                 </div>
                               </div>
+                              <div className="space-y-5">
+                                <div>
+                                  <div className="text-xs text-slate-500 mb-2 flex items-center gap-1.5"><Mail className="h-3.5 w-3.5" /> Mejl</div>
+                                  {(mails[l.id] ?? []).length === 0 && <div className="text-xs text-slate-600">Inga mejl till butiken än.</div>}
+                                  <div className="space-y-2">
+                                    {(mails[l.id] ?? []).map((m) => {
+                                      const isOpenMail = openMail === m.id;
+                                      return (
+                                        <div key={m.id} className="rounded-lg border border-white/5 bg-[#111827]">
+                                          <button onClick={() => setOpenMail(isOpenMail ? null : m.id)} className="w-full text-left px-3 py-2 flex items-start gap-2">
+                                            {m.direction === "in" ? <Inbox className="h-3.5 w-3.5 text-emerald-300 mt-0.5 shrink-0" /> : <Send className="h-3.5 w-3.5 text-blue-300 mt-0.5 shrink-0" />}
+                                            <div className="min-w-0 flex-1">
+                                              <div className="text-xs text-white truncate">{m.subject}</div>
+                                              <div className="text-[11px] text-slate-500">
+                                                {timeSv(m.sentAt)} · {m.direction === "in" ? `från ${m.fromAddress ?? "okänd"}` : `${m.fromAddress ?? "–"} → ${m.toAddress ?? "–"}`}
+                                                {m.templateName && ` · mall: ${m.templateName} v${m.templateVersion ?? "?"}`}
+                                                {m.byName && ` · loggat av ${m.byName}`}
+                                              </div>
+                                            </div>
+                                            {isOpenMail ? <ChevronDown className="h-3.5 w-3.5 text-slate-500" /> : <ChevronRight className="h-3.5 w-3.5 text-slate-500" />}
+                                          </button>
+                                          {isOpenMail && (
+                                            <div className="px-3 pb-3 pt-2 text-xs text-slate-300 whitespace-pre-wrap leading-relaxed border-t border-white/5">{m.body}</div>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
                               <div>
                                 <div className="text-xs text-slate-500 mb-2 flex items-center gap-1.5"><History className="h-3.5 w-3.5" /> Historik</div>
                                 <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
@@ -359,10 +421,12 @@ export default function ButikerPage() {
                                       <span className="text-slate-300">{e.byName ?? "Okänd"}</span>{" "}
                                       {e.kind === "call" && <span className="text-cyan-400">ringde – {outcomeLabel(e.outcome)}</span>}
                                       {e.kind === "status" && <span className="text-violet-300">status: {statusMeta(e.outcome ?? "ny").label}</span>}
+                                      {e.kind === "email" && <span className="text-blue-300">{e.outcome === "in" ? "fick svar" : "mejlade"}</span>}
                                       {e.note && <div className="text-slate-400 pl-2 border-l border-white/10 mt-0.5">{e.note}</div>}
                                     </div>
                                   ))}
                                 </div>
+                              </div>
                               </div>
                             </div>
                           </td>
@@ -397,7 +461,7 @@ export default function ButikerPage() {
                 return (
                   <button key={e.id} onClick={() => l && toggle(l.id)} className="block text-left text-xs w-full hover:bg-white/[0.02] rounded">
                     <span className="text-slate-300">{e.byName ?? "Okänd"}</span>{" "}
-                    <span className="text-slate-500">{e.kind === "call" ? "ringde" : e.kind === "status" ? "ändrade" : "skrev om"}</span>{" "}
+                    <span className="text-slate-500">{eventVerb(e)}</span>{" "}
                     <span className="text-white">{l?.name ?? "borttagen butik"}</span>
                     {e.kind === "call" && <span className="text-cyan-400"> – {outcomeLabel(e.outcome)}</span>}
                     {e.kind === "status" && <span className="text-violet-300"> → {statusMeta(e.outcome ?? "ny").label}</span>}
@@ -410,6 +474,7 @@ export default function ButikerPage() {
           </div>
         </div>
       </div>
+      </>}
     </div>
   );
 }

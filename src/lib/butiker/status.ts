@@ -7,6 +7,7 @@ export const LEAD_STATUSES = [
   { key: "ring_igen", label: "Ring igen", cls: "bg-amber-500/10 text-amber-400 border-amber-500/30" },
   { key: "intresserad", label: "Intresserad", cls: "bg-cyan-500/10 text-cyan-300 border-cyan-500/20" },
   { key: "mejla_villkor", label: "Mejla villkor (samtycke)", cls: "bg-sky-500/10 text-sky-300 border-sky-500/20" },
+  { key: "mejlad", label: "Mejl skickat", cls: "bg-blue-500/10 text-blue-300 border-blue-500/20" },
   { key: "prov_skickat", label: "Prov skickat", cls: "bg-violet-500/10 text-violet-300 border-violet-500/20" },
   { key: "kund", label: "Kund", cls: "bg-emerald-500/10 text-emerald-300 border-emerald-500/20" },
   { key: "nej", label: "Nej tack", cls: "bg-red-500/10 text-red-300 border-red-500/20" },
@@ -29,3 +30,11 @@ export const CALL_OUTCOMES: { key: string; label: string; status: LeadStatus; fo
 
 export const dedupeKey = (name: string, city: string | null | undefined) =>
   `${name.trim().toLowerCase().replace(/\s+/g, " ")}|${(city ?? "").trim().toLowerCase()}`;
+
+/** Template placeholders, filled per shop when a mail is written. */
+export const TEMPLATE_FIELDS: { token: string; label: string }[] = [
+  { token: "{butik}", label: "Butikens namn" },
+  { token: "{ort}", label: "Ort" },
+];
+export const fillTemplate = (text: string, lead: { name: string; city: string | null }) =>
+  text.replaceAll("{butik}", lead.name).replaceAll("{ort}", lead.city ?? "");
