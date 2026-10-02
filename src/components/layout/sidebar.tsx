@@ -31,6 +31,7 @@ import {
   Repeat,
   ShieldCheck,
   PackageSearch,
+  Store,
 } from "lucide-react";
 import { AREAS, type AreaDef } from "@/lib/access";
 import { signOut } from "next-auth/react";
@@ -45,7 +46,7 @@ const AREA_ICONS: Record<string, React.ComponentType<{ className?: string }>> = 
   upload: Upload, templates: FileText, creatives: Image,
   assignments: LayoutGrid, "my-work": ClipboardList, review: Eye, timer: Timer,
   editors: Users, scorecards: Users2, options: SlidersHorizontal, shopify: ShoppingBag, settings: Settings,
-  lager: PackageSearch,
+  lager: PackageSearch, butiker: Store,
   time: Hourglass, access: ShieldCheck,
 };
 // Extra links that live inside an area.

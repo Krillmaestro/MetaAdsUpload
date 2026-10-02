@@ -1142,3 +1142,46 @@ export const inventorySalesDaily = pgTable("inventory_sales_daily", {
   uniqueIndex("inventory_sales_daily_key_idx").on(table.productId, table.soldOn),
   index("inventory_sales_daily_date_idx").on(table.soldOn),
 ]);
+
+// ─── Butiker (B2B-ringlista) ─────────────────────────────────────────────────
+
+export const retailLeads = pgTable("retail_leads", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  // lower(name)|lower(city) — keeps re-imports from creating duplicates
+  dedupeKey: text("dedupe_key").notNull().unique(),
+  name: text("name").notNull(),
+  type: text("type"),
+  address: text("address"),
+  postalCode: text("postal_code"),
+  city: text("city"),
+  county: text("county"),
+  phone: text("phone"),
+  email: text("email"),
+  website: text("website"),
+  brands: text("brands"), // competitor brands the shop already sells
+  companyForm: text("company_form"), // AB | EF | … — EF may not be emailed without consent
+  source: text("source"),
+  status: text("status").notNull().default("ny"),
+  ownerName: text("owner_name"),
+  nextActionOn: date("next_action_on"),
+  lastContactAt: timestamp("last_contact_at"),
+  callCount: integer("call_count").notNull().default(0),
+  lastNote: text("last_note"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("retail_leads_status_idx").on(table.status),
+  index("retail_leads_county_idx").on(table.county),
+]);
+
+export const retailLeadEvents = pgTable("retail_lead_events", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  leadId: text("lead_id").notNull(),
+  kind: text("kind").notNull(), // call | email | sample | order | note | status
+  outcome: text("outcome"),
+  note: text("note"),
+  byName: text("by_name"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("retail_lead_events_lead_idx").on(table.leadId, table.createdAt),
+]);
