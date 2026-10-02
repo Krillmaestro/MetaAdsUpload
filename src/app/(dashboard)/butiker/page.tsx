@@ -18,7 +18,9 @@ type Payload = { leads: Lead[]; events: LeadEvent[]; me: string | null };
 const todayIso = () => new Date().toISOString().slice(0, 10);
 const dateSv = (s: string | null) => (s ? new Date(s.length === 10 ? s + "T00:00:00" : s).toLocaleDateString("sv-SE", { day: "numeric", month: "short" }) : "–");
 const timeSv = (s: string) => new Date(s).toLocaleString("sv-SE", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
-const telHref = (p: string) => `tel:${p.replace(/[^\d+]/g, "")}`;
+/** Some shops list several numbers ("0454-182 90, 072-…") — dial the first one. */
+const firstPhone = (p: string) => p.split(/[,;/]| eller /)[0].trim();
+const telHref = (p: string) => `tel:${firstPhone(p).replace(/[^\d+]/g, "")}`;
 const webHref = (w: string) => (w.startsWith("http") ? w : `https://${w}`);
 /** Enskild firma counts as a private person: no sales email without consent. */
 const isEF = (l: Lead) => /enskild|^ef$/i.test(l.companyForm ?? "");
@@ -294,8 +296,9 @@ export default function ButikerPage() {
                           {l.city ?? "–"}<div className="text-[11px] text-slate-500">{l.county}</div>
                         </td>
                         <td className="px-3 py-2 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                          {l.phone && <a href={telHref(l.phone)} className="flex items-center gap-1.5 text-cyan-400 hover:underline"><Phone className="h-3.5 w-3.5" />{l.phone}</a>}
-                          {l.email && <a href={`mailto:${l.email}`} className="flex items-center gap-1.5 text-slate-400 hover:text-white text-xs"><Mail className="h-3 w-3" />{l.email}</a>}
+                          {l.phone && <a href={telHref(l.phone)} className="flex items-center gap-1.5 text-cyan-400 hover:underline"><Phone className="h-3.5 w-3.5" />{firstPhone(l.phone)}</a>}
+                          {l.phone && firstPhone(l.phone) !== l.phone.trim() && <div className="text-[11px] text-slate-500">{l.phone}</div>}
+                          {l.email && <a href={`mailto:${l.email.split(/[;,]/)[0].trim()}`} className="flex items-center gap-1.5 text-slate-400 hover:text-white text-xs"><Mail className="h-3 w-3" />{l.email}</a>}
                           {!l.phone && !l.email && l.website && <a href={webHref(l.website)} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-slate-400 hover:text-white text-xs"><Globe className="h-3 w-3" />webb</a>}
                         </td>
                         <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
