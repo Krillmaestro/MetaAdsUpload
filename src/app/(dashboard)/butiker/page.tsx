@@ -11,6 +11,8 @@ type Lead = {
   city: string | null; county: string | null; phone: string | null; email: string | null; website: string | null;
   brands: string | null; companyForm: string | null; source: string | null; status: string; ownerName: string | null;
   nextActionOn: string | null; lastContactAt: string | null; callCount: number; lastNote: string | null;
+  localCustomers: number | null; localPopulation: number | null; localIndex: number | null;
+  priority: number | null; priorityNote: string | null;
   createdAt: string; updatedAt: string;
 };
 type LeadEvent = { id: string; leadId: string; kind: string; outcome: string | null; note: string | null; byName: string | null; createdAt: string };
@@ -45,6 +47,7 @@ export default function ButikerPage() {
   const [status, setStatus] = useState("");
   const [onlyDue, setOnlyDue] = useState(false);
   const [onlyPhone, setOnlyPhone] = useState(false);
+  const [sort, setSort] = useState<"prio" | "ort">("prio");
   const [limit, setLimit] = useState(PAGE);
   const [open, setOpen] = useState<string | null>(null);
   const [view, setView] = useState<"lista" | "mallar">("lista");
@@ -90,7 +93,7 @@ export default function ButikerPage() {
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    return leads.filter((l) => {
+    const list = leads.filter((l) => {
       if (county && l.county !== county) return false;
       if (status && l.status !== status) return false;
       if (onlyPhone && !l.phone) return false;
@@ -101,8 +104,10 @@ export default function ButikerPage() {
       }
       return true;
     });
+    const out = sort === "prio" ? [...list].sort((a, b) => (a.priority ?? 1e9) - (b.priority ?? 1e9)) : list;
+    return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leads, q, county, status, onlyPhone, onlyDue, today]);
+  }, [leads, q, county, status, onlyPhone, onlyDue, today, sort]);
 
   const callsToday = useMemo(() => {
     const by: Record<string, number> = {};
@@ -189,7 +194,7 @@ export default function ButikerPage() {
         <div>
           <h1 className="text-2xl font-bold text-white flex items-center gap-2"><Store className="h-6 w-6 text-cyan-400" /> Butiker (B2B)</h1>
           <p className="text-sm text-slate-500 mt-0.5">
-            Ringlistan till fristående butiker. Allt som loggas syns direkt för alla. Listan uppdateras själv var 20:e sekund.
+            Kontaktlistan till fristående butiker, sorterad efter var våra kunder redan finns. Allt som loggas syns direkt för alla. Listan uppdateras själv var 20:e sekund.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -217,7 +222,7 @@ export default function ButikerPage() {
       )}
 
       <div className="flex gap-1 border-b border-white/5">
-        {([["lista", "Ringlista", List], ["mallar", "Mejlmallar", FileText]] as const).map(([k, label, Icon]) => (
+        {([["lista", "Kontaktlista", List], ["mallar", "Mejlmallar", FileText]] as const).map(([k, label, Icon]) => (
           <button key={k} onClick={() => setView(k)}
             className={`px-3 py-2 text-sm flex items-center gap-2 border-b-2 -mb-px ${view === k ? "border-cyan-400 text-white" : "border-transparent text-slate-500 hover:text-slate-300"}`}>
             <Icon className="h-4 w-4" /> {label}
@@ -226,7 +231,7 @@ export default function ButikerPage() {
         ))}
       </div>
 
-      {view === "mallar" && <MallarView example={leads.find((l) => isEF(l) && l.email) ?? leads[0] ?? null} />}
+      {view === "mallar" && <MallarView example={[...leads].filter((l) => l.email && l.priority != null).sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0))[0] ?? leads[0] ?? null} />}
 
       {view === "lista" && adding && (
         <div className="rounded-xl border border-white/5 bg-[#111827] p-4 space-y-3">
@@ -276,8 +281,12 @@ export default function ButikerPage() {
               <option value="">Alla län</option>
               {counties.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
+            <select className={input} value={sort} onChange={(e) => setSort(e.target.value as "prio" | "ort")}>
+              <option value="prio">Sortera: prioritet</option>
+              <option value="ort">Sortera: län och ort</option>
+            </select>
             <label className="flex items-center gap-1.5 text-sm text-slate-400 px-2 cursor-pointer">
-              <input type="checkbox" checked={onlyDue} onChange={(e) => setOnlyDue(e.target.checked)} /> Att ringa i dag
+              <input type="checkbox" checked={onlyDue} onChange={(e) => setOnlyDue(e.target.checked)} /> Att kontakta i dag
             </label>
             <label className="flex items-center gap-1.5 text-sm text-slate-400 px-2 cursor-pointer">
               <input type="checkbox" checked={onlyPhone} onChange={(e) => setOnlyPhone(e.target.checked)} /> Har telefon
@@ -290,6 +299,7 @@ export default function ButikerPage() {
               <thead>
                 <tr className="text-[11px] uppercase tracking-wide text-slate-500 border-b border-white/5">
                   <th className="text-left font-medium px-3 py-2 w-8"></th>
+                  <th className="text-right font-medium px-2 py-2 w-12" title="Prioritet: där flest av ortens invånare redan köper av oss">Prio</th>
                   <th className="text-left font-medium px-3 py-2">Butik</th>
                   <th className="text-left font-medium px-3 py-2">Ort</th>
                   <th className="text-left font-medium px-3 py-2">Kontakt</th>
@@ -300,10 +310,10 @@ export default function ButikerPage() {
               </thead>
               <tbody>
                 {loading && !data && (
-                  <tr><td colSpan={7} className="px-3 py-10 text-center text-slate-500">Laddar …</td></tr>
+                  <tr><td colSpan={8} className="px-3 py-10 text-center text-slate-500">Laddar …</td></tr>
                 )}
                 {!loading && filtered.length === 0 && (
-                  <tr><td colSpan={7} className="px-3 py-10 text-center text-slate-500">
+                  <tr><td colSpan={8} className="px-3 py-10 text-center text-slate-500">
                     {leads.length === 0 ? "Inga butiker inlästa än." : "Inga butiker matchar filtren."}
                   </td></tr>
                 )}
@@ -315,6 +325,10 @@ export default function ButikerPage() {
                     <Fragment key={l.id}>
                       <tr className={`border-b border-white/5 hover:bg-white/[0.02] cursor-pointer ${isOpen ? "bg-white/[0.03]" : ""}`} onClick={() => toggle(l.id)}>
                         <td className="px-3 py-2 text-slate-500">{isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}</td>
+                        <td className="px-2 py-2 text-right whitespace-nowrap" title={l.priorityNote ?? undefined}>
+                          <div className="text-xs text-white tabular-nums">{l.priority ?? "–"}</div>
+                          {l.localIndex != null && <div className={`text-[10px] tabular-nums ${l.localIndex >= 1.5 ? "text-emerald-300" : l.localIndex >= 1 ? "text-cyan-300" : "text-slate-500"}`}>{l.localIndex.toLocaleString("sv-SE", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}×</div>}
+                        </td>
                         <td className="px-3 py-2">
                           <div className="text-white font-medium">{l.name}</div>
                           <div className="text-[11px] text-slate-500">
@@ -324,6 +338,7 @@ export default function ButikerPage() {
                         </td>
                         <td className="px-3 py-2 text-slate-300 whitespace-nowrap">
                           {l.city ?? "–"}<div className="text-[11px] text-slate-500">{l.county}</div>
+                          {(l.localCustomers ?? 0) > 0 && <div className="text-[11px] text-emerald-300/80">{l.localCustomers} kunder här</div>}
                         </td>
                         <td className="px-3 py-2 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                           {l.phone && <a href={telHref(l.phone)} className="flex items-center gap-1.5 text-cyan-400 hover:underline"><Phone className="h-3.5 w-3.5" />{firstPhone(l.phone)}</a>}
@@ -348,7 +363,7 @@ export default function ButikerPage() {
                       </tr>
                       {isOpen && (
                         <tr className="border-b border-white/5 bg-[#0d1322]">
-                          <td colSpan={7} className="px-4 py-4">
+                          <td colSpan={8} className="px-4 py-4">
                             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                               <div className="space-y-3">
                                 <div className="text-xs text-slate-500">Logga samtal{data?.me ? ` som ${data.me}` : ""}</div>
@@ -377,6 +392,7 @@ export default function ButikerPage() {
                                   <p className="text-[11px] text-amber-400/80">Enskild firma: mejla bara om de har sagt ja i telefon. Välj då ”Ja, mejla villkoren”, så sparas samtycket med datum.</p>
                                 )}
                                 <div className="text-[11px] text-slate-500 space-y-0.5 pt-2 border-t border-white/5">
+                                  {l.priorityNote && <div className="text-emerald-300/80">Prioritet {l.priority}: {l.priorityNote}</div>}
                                   {(l.address || l.postalCode) && <div>{[l.address, l.postalCode, l.city].filter(Boolean).join(", ")}</div>}
                                   {l.website && <div><a href={webHref(l.website)} target="_blank" rel="noreferrer" className="text-cyan-400 hover:underline">{l.website}</a></div>}
                                   <div>Bolagsform: {l.companyForm ?? "okänd (behandla som EF)"} · Källa: {l.source ?? "–"}</div>

@@ -21,7 +21,7 @@ const words = (s: string) => s.trim().split(/\s+/).filter(Boolean).length;
 const empty = { name: "", subject: "", body: "", notes: "", state: "utkast" };
 
 /** The mail templates used for the shops: what we say, which version, and how many got it. */
-export function MallarView({ example }: { example: { name: string; city: string | null } | null }) {
+export function MallarView({ example }: { example: { name: string; city: string | null; localCustomers?: number | null } | null }) {
   const [templates, setTemplates] = useState<MailTemplate[]>([]);
   const [usage, setUsage] = useState<Usage[]>([]);
   const [loading, setLoading] = useState(true);

@@ -35,6 +35,22 @@ export const dedupeKey = (name: string, city: string | null | undefined) =>
 export const TEMPLATE_FIELDS: { token: string; label: string }[] = [
   { token: "{butik}", label: "Butikens namn" },
   { token: "{ort}", label: "Ort" },
+  { token: "{kunder}", label: "Våra kunder på orten" },
+  { token: "{kundrad}", label: "Meningen om kunder på orten (tas bort om orten har färre än 10)" },
 ];
-export const fillTemplate = (text: string, lead: { name: string; city: string | null }) =>
-  text.replaceAll("{butik}", lead.name).replaceAll("{ort}", lead.city ?? "");
+export const LOCAL_CUSTOMERS_MIN = 10;
+type FillLead = { name: string; city: string | null; localCustomers?: number | null };
+/** Fill a template for one shop. {kundrad} disappears, with its line, when the town has too few customers. */
+export const fillTemplate = (text: string, lead: FillLead) => {
+  const n = lead.localCustomers ?? 0;
+  const line = n >= LOCAL_CUSTOMERS_MIN && lead.city
+    ? `Bara i ${lead.city} har ${n.toLocaleString("sv-SE")} hundägare redan handlat av oss.`
+    : "";
+  return text
+    .replaceAll("{kundrad}", line)
+    .replaceAll("{butik}", lead.name)
+    .replaceAll("{ort}", lead.city ?? "")
+    .replaceAll("{kunder}", n.toLocaleString("sv-SE"))
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n");
+};

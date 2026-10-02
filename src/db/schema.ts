@@ -1167,6 +1167,13 @@ export const retailLeads = pgTable("retail_leads", {
   lastContactAt: timestamp("last_contact_at"),
   callCount: integer("call_count").notNull().default(0),
   lastNote: text("last_note"),
+  // Local demand: our Shopify customers in the shop's town, its population and
+  // customers per 1 000 inhabitants relative to the national average (1.0 = average).
+  localCustomers: integer("local_customers"),
+  localPopulation: integer("local_population"),
+  localIndex: real("local_index"),
+  priority: integer("priority"), // 1 = contact first
+  priorityNote: text("priority_note"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => [
