@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
-import { Store, RefreshCw, AlertTriangle, Plus, Phone, Mail, Globe, Download, Search, ChevronDown, ChevronRight, X, History, Send, Inbox, FileText, List } from "lucide-react";
+import { Store, RefreshCw, AlertTriangle, Plus, Phone, Mail, Globe, Download, Search, ChevronDown, ChevronRight, X, History, Send, Inbox, FileText, List, Star } from "lucide-react";
 import { toast } from "sonner";
 import { LEAD_STATUSES, CALL_OUTCOMES, statusMeta } from "@/lib/butiker/status";
 import { MallarView } from "./mallar-view";
@@ -21,7 +21,7 @@ type LeadEmail = {
   subject: string; body: string; templateId: string | null; templateName: string | null; templateVersion: number | null;
   sentAt: string; byName: string | null;
 };
-type MailStat = { leadId: string; sent: number; replies: number; lastAt: string | null };
+type MailStat = { leadId: string; sent: number; replies: number; lastAt: string | null; lastInAt?: string | null; lastOutAt?: string | null };
 type Payload = { leads: Lead[]; events: LeadEvent[]; mailStats?: MailStat[]; me: string | null };
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
@@ -50,7 +50,8 @@ export default function ButikerPage() {
   const [sort, setSort] = useState<"prio" | "ort">("prio");
   const [limit, setLimit] = useState(PAGE);
   const [open, setOpen] = useState<string | null>(null);
-  const [view, setView] = useState<"lista" | "mallar">("lista");
+  const [view, setView] = useState<"lista" | "intresserade" | "mallar">("lista");
+  const [answered, setAnswered] = useState<"obesvarade" | "besvarade">("obesvarade");
   const [history, setHistory] = useState<Record<string, LeadEvent[]>>({});
   const [mails, setMails] = useState<Record<string, LeadEmail[]>>({});
   const [openMail, setOpenMail] = useState<string | null>(null);
@@ -91,11 +92,26 @@ export default function ButikerPage() {
   const today = todayIso();
   const isDue = (l: Lead) => l.status === "ny" || (!!l.nextActionOn && l.nextActionOn <= today && !["kund", "nej", "fel_nummer"].includes(l.status));
 
+  /** Interested shops: waiting on us when their latest mail is newer than ours (or we never replied). */
+  const awaitingUs = useMemo(() => {
+    const stats = new Map((data?.mailStats ?? []).map((m) => [m.leadId, m]));
+    return (l: Lead) => {
+      const m = stats.get(l.id);
+      if (!m?.lastOutAt) return true;
+      return !!m.lastInAt && new Date(m.lastInAt) > new Date(m.lastOutAt);
+    };
+  }, [data]);
+  const interested = useMemo(() => leads.filter((l) => l.status === "intresserad"), [leads]);
+  const interestedOpen = useMemo(() => interested.filter(awaitingUs).length, [interested, awaitingUs]);
+
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
     const list = leads.filter((l) => {
+      if (view === "intresserade") {
+        if (l.status !== "intresserad") return false;
+        if (awaitingUs(l) !== (answered === "obesvarade")) return false;
+      } else if (status && l.status !== status) return false;
       if (county && l.county !== county) return false;
-      if (status && l.status !== status) return false;
       if (onlyPhone && !l.phone) return false;
       if (onlyDue && !isDue(l)) return false;
       if (needle) {
@@ -107,7 +123,7 @@ export default function ButikerPage() {
     const out = sort === "prio" ? [...list].sort((a, b) => (a.priority ?? 1e9) - (b.priority ?? 1e9)) : list;
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leads, q, county, status, onlyPhone, onlyDue, today, sort]);
+  }, [leads, q, county, status, onlyPhone, onlyDue, today, sort, view, answered, awaitingUs]);
 
   const callsToday = useMemo(() => {
     const by: Record<string, number> = {};
@@ -222,11 +238,13 @@ export default function ButikerPage() {
       )}
 
       <div className="flex gap-1 border-b border-white/5">
-        {([["lista", "Kontaktlista", List], ["mallar", "Mejlmallar", FileText]] as const).map(([k, label, Icon]) => (
+        {([["lista", "Kontaktlista", List], ["intresserade", "Intresserade", Star], ["mallar", "Mejlmallar", FileText]] as const).map(([k, label, Icon]) => (
           <button key={k} onClick={() => setView(k)}
             className={`px-3 py-2 text-sm flex items-center gap-2 border-b-2 -mb-px ${view === k ? "border-cyan-400 text-white" : "border-transparent text-slate-500 hover:text-slate-300"}`}>
             <Icon className="h-4 w-4" /> {label}
             {k === "mallar" && mailedShops > 0 && <span className="text-[11px] text-slate-500">{mailedShops} mejlade butiker</span>}
+            {k === "intresserade" && <span className="text-[11px] text-slate-500">{interested.length}</span>}
+            {k === "intresserade" && interestedOpen > 0 && <span className="text-[11px] px-1.5 rounded-full bg-amber-500/15 text-amber-300">{interestedOpen} väntar</span>}
           </button>
         ))}
       </div>
@@ -251,6 +269,20 @@ export default function ButikerPage() {
         </div>
       )}
 
+      {(view === "lista" || view === "intresserade") && <>
+      {view === "intresserade" && (
+        <div className="flex flex-wrap items-center gap-2">
+          {([["obesvarade", "Väntar på vårt svar", interestedOpen], ["besvarade", "Besvarade", interested.length - interestedOpen]] as const).map(([k, label, n]) => (
+            <button key={k} onClick={() => { setAnswered(k); setLimit(PAGE); }}
+              className={`px-3 py-2 rounded-lg text-sm border flex items-center gap-2 ${answered === k ? "border-cyan-500/30 bg-cyan-500/5 text-white" : "border-white/10 text-slate-400 hover:bg-white/[0.03]"}`}>
+              {label} <span className={`text-xs ${k === "obesvarade" && n > 0 ? "text-amber-300" : "text-slate-500"}`}>{n}</span>
+            </button>
+          ))}
+          <span className="text-xs text-slate-500">
+            {answered === "obesvarade" ? "Butiken har hört av sig senast – de väntar på oss." : "Vi har svarat senast – nu är det deras tur."}
+          </span>
+        </div>
+      )}
       {view === "lista" && <>
       {/* Pipeline: click a stage to filter on it */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-10 gap-2">
@@ -268,6 +300,7 @@ export default function ButikerPage() {
           </button>
         ))}
       </div>
+      </>}
 
       <div className="grid grid-cols-1 xl:grid-cols-[1fr_300px] gap-6">
         <div className="space-y-3 min-w-0">
@@ -357,6 +390,11 @@ export default function ButikerPage() {
                           {l.lastContactAt ? <>{dateSv(l.lastContactAt)} · {l.callCount} samtal<div className="text-slate-500">{l.ownerName}</div></> : "–"}
                           {(mailStat.get(l.id)?.sent ?? 0) > 0 && (
                             <div className="flex items-center gap-1 text-blue-300"><Send className="h-3 w-3" />{mailStat.get(l.id)!.sent} mejl{(mailStat.get(l.id)?.replies ?? 0) > 0 && <span className="text-emerald-300"> · {mailStat.get(l.id)!.replies} svar</span>}</div>
+                          )}
+                          {l.status === "intresserad" && mailStat.get(l.id)?.lastInAt && (
+                            awaitingUs(l)
+                              ? <div className="text-amber-300">svarade {dateSv(mailStat.get(l.id)!.lastInAt!)} – väntar på oss</div>
+                              : <div className="text-emerald-300/80">vi svarade {dateSv(mailStat.get(l.id)!.lastOutAt!)}</div>
                           )}
                         </td>
                         <td className={`px-3 py-2 text-xs whitespace-nowrap ${overdue ? "text-red-400" : "text-slate-400"}`}>{dateSv(l.nextActionOn)}</td>

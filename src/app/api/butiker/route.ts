@@ -23,6 +23,8 @@ export async function GET() {
         sent: sql<number>`count(*) filter (where ${E.direction} = 'ut')::int`,
         replies: sql<number>`count(*) filter (where ${E.direction} = 'in')::int`,
         lastAt: sql<string>`max(${E.sentAt})`,
+        lastInAt: sql<string | null>`max(${E.sentAt}) filter (where ${E.direction} = 'in')`,
+        lastOutAt: sql<string | null>`max(${E.sentAt}) filter (where ${E.direction} = 'ut')`,
       }).from(E).groupBy(E.leadId),
     ]);
     return NextResponse.json({ leads, events, mailStats, me: session.user.name ?? session.user.email ?? null });
