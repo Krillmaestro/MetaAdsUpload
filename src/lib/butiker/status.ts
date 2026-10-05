@@ -4,7 +4,7 @@
 export const LEAD_STATUSES = [
   { key: "ny", label: "Ej kontaktad", cls: "bg-slate-500/10 text-slate-300 border-slate-500/20" },
   { key: "inget_svar", label: "Inget svar", cls: "bg-amber-500/10 text-amber-300 border-amber-500/20" },
-  { key: "ring_igen", label: "Ring igen", cls: "bg-amber-500/10 text-amber-400 border-amber-500/30" },
+  { key: "ring_igen", label: "Kontakta igen", cls: "bg-amber-500/10 text-amber-400 border-amber-500/30" },
   { key: "intresserad", label: "Intresserad", cls: "bg-cyan-500/10 text-cyan-300 border-cyan-500/20" },
   { key: "mejla_villkor", label: "Mejla villkor (samtycke)", cls: "bg-sky-500/10 text-sky-300 border-sky-500/20" },
   { key: "mejlad", label: "Mejl skickat", cls: "bg-blue-500/10 text-blue-300 border-blue-500/20" },
@@ -21,7 +21,7 @@ export const statusMeta = (key: string) => LEAD_STATUSES.find((s) => s.key === k
 /** Call outcomes a caller can pick, and the status each one moves the shop to. */
 export const CALL_OUTCOMES: { key: string; label: string; status: LeadStatus; followUpDays?: number }[] = [
   { key: "inget_svar", label: "Inget svar", status: "inget_svar", followUpDays: 2 },
-  { key: "ring_igen", label: "Ring igen", status: "ring_igen", followUpDays: 3 },
+  { key: "ring_igen", label: "Kontakta igen", status: "ring_igen", followUpDays: 3 },
   { key: "intresserad", label: "Intresserad", status: "intresserad", followUpDays: 4 },
   { key: "mejla_villkor", label: "Ja, mejla villkoren", status: "mejla_villkor", followUpDays: 4 },
   { key: "nej", label: "Nej tack", status: "nej" },
