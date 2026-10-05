@@ -37,6 +37,8 @@ const eventVerb = (e: LeadEvent) =>
   e.kind === "call" ? "ringde" : e.kind === "status" ? "ändrade" : e.kind === "email" ? (e.outcome === "in" ? "fick svar från" : "mejlade") : "skrev om";
 const outcomeLabel = (k: string | null) => CALL_OUTCOMES.find((o) => o.key === k)?.label ?? statusMeta(k ?? "ny").label;
 const PAGE = 150;
+/** Days without an answer after we sent the package before we nudge them. */
+const STALE_DAYS = 7;
 
 export default function ButikerPage() {
   const [data, setData] = useState<Payload | null>(null);
@@ -269,10 +271,53 @@ export default function ButikerPage() {
         </div>
       )}
 
+      {(view === "lista" || view === "intresserade") && interested.length > 0 && (() => {
+        const daysSince = (d?: string | null) => (d ? Math.floor((Date.now() - new Date(d).getTime()) / 86400000) : null);
+        const ours = interested.filter(awaitingUs).sort((a, b) => (mailStat.get(a.id)?.lastInAt ?? "").localeCompare(mailStat.get(b.id)?.lastInAt ?? ""));
+        const theirs = interested.filter((l) => !awaitingUs(l)).sort((a, b) => (mailStat.get(a.id)?.lastOutAt ?? "").localeCompare(mailStat.get(b.id)?.lastOutAt ?? ""));
+        const openShop = (l: Lead) => { setView("lista"); setStatus(""); setCounty(""); setQ(l.name); setOpen(l.id); loadHistory(l.id); };
+        const Row = ({ l, kind }: { l: Lead; kind: "ours" | "theirs" }) => {
+          const m = mailStat.get(l.id);
+          const d = daysSince(kind === "ours" ? m?.lastInAt : m?.lastOutAt);
+          const stale = kind === "theirs" && d != null && d >= STALE_DAYS;
+          return (
+            <button onClick={() => openShop(l)} className="w-full text-left flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-white/[0.04]">
+              <span className="text-sm text-white truncate flex-1">{l.name}<span className="text-slate-500 text-xs"> · {l.city ?? "–"}</span></span>
+              <span className={`text-xs whitespace-nowrap ${kind === "ours" ? "text-amber-300" : stale ? "text-red-400" : "text-slate-400"}`}>
+                {kind === "ours"
+                  ? `svarade ${dateSv(m?.lastInAt ?? null)}`
+                  : d == null ? "inget mejl från oss" : `${d === 0 ? "i dag" : `${d} dag${d === 1 ? "" : "ar"}`}${stale ? " – dags att höra av sig" : ""}`}
+              </span>
+            </button>
+          );
+        };
+        return (
+          <div className="rounded-xl border border-cyan-500/20 bg-[#111827] p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <Star className="h-4 w-4 text-cyan-400" />
+              <span className="text-sm font-semibold text-white">Intresserade butiker</span>
+              <span className="text-xs text-slate-500">{interested.length} st · klicka på en butik för att se mejlen</span>
+            </div>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div className="rounded-lg border border-amber-500/20 bg-amber-500/[0.03] p-3">
+                <div className="text-xs font-medium text-amber-300 mb-1">Väntar på vårt svar ({ours.length})</div>
+                <div className="text-[11px] text-slate-500 mb-2">De har skrivit – vi behöver svara.</div>
+                {ours.length === 0 ? <div className="text-sm text-slate-600 px-2">Inga – alla är besvarade.</div> : ours.map((l) => <Row key={l.id} l={l} kind="ours" />)}
+              </div>
+              <div className="rounded-lg border border-white/10 p-3">
+                <div className="text-xs font-medium text-cyan-300 mb-1">Väntar på deras svar ({theirs.length})</div>
+                <div className="text-[11px] text-slate-500 mb-2">Vi har skickat paketet. Rött = tyst i {STALE_DAYS}+ dagar, dags att höra av sig.</div>
+                {theirs.length === 0 ? <div className="text-sm text-slate-600 px-2">Inga.</div> : theirs.map((l) => <Row key={l.id} l={l} kind="theirs" />)}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {(view === "lista" || view === "intresserade") && <>
       {view === "intresserade" && (
         <div className="flex flex-wrap items-center gap-2">
-          {([["obesvarade", "Väntar på vårt svar", interestedOpen], ["besvarade", "Besvarade", interested.length - interestedOpen]] as const).map(([k, label, n]) => (
+          {([["obesvarade", "Väntar på vårt svar", interestedOpen], ["besvarade", "Väntar på deras svar", interested.length - interestedOpen]] as const).map(([k, label, n]) => (
             <button key={k} onClick={() => { setAnswered(k); setLimit(PAGE); }}
               className={`px-3 py-2 rounded-lg text-sm border flex items-center gap-2 ${answered === k ? "border-cyan-500/30 bg-cyan-500/5 text-white" : "border-white/10 text-slate-400 hover:bg-white/[0.03]"}`}>
               {label} <span className={`text-xs ${k === "obesvarade" && n > 0 ? "text-amber-300" : "text-slate-500"}`}>{n}</span>
