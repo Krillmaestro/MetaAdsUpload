@@ -104,6 +104,7 @@ export default function ButikerPage() {
     };
   }, [data]);
   const interested = useMemo(() => leads.filter((l) => l.status === "intresserad"), [leads]);
+  const onHold = useMemo(() => leads.filter((l) => l.status === "avvakta"), [leads]);
   const interestedOpen = useMemo(() => interested.filter(awaitingUs).length, [interested, awaitingUs]);
 
   const filtered = useMemo(() => {
@@ -271,7 +272,7 @@ export default function ButikerPage() {
         </div>
       )}
 
-      {(view === "lista" || view === "intresserade") && interested.length > 0 && (() => {
+      {(view === "lista" || view === "intresserade") && (interested.length > 0 || onHold.length > 0) && (() => {
         const daysSince = (d?: string | null) => (d ? Math.floor((Date.now() - new Date(d).getTime()) / 86400000) : null);
         const ours = interested.filter(awaitingUs).sort((a, b) => (mailStat.get(a.id)?.lastInAt ?? "").localeCompare(mailStat.get(b.id)?.lastInAt ?? ""));
         const theirs = interested.filter((l) => !awaitingUs(l)).sort((a, b) => (mailStat.get(a.id)?.lastOutAt ?? "").localeCompare(mailStat.get(b.id)?.lastOutAt ?? ""));
@@ -296,9 +297,9 @@ export default function ButikerPage() {
             <div className="flex items-center gap-2 mb-3">
               <Star className="h-4 w-4 text-cyan-400" />
               <span className="text-sm font-semibold text-white">Intresserade butiker</span>
-              <span className="text-xs text-slate-500">{interested.length} st · klicka på en butik för att se mejlen</span>
+              <span className="text-xs text-slate-500">{interested.length + onHold.length} st · klicka på en butik för att se mejlen</span>
             </div>
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
               <div className="rounded-lg border border-amber-500/20 bg-amber-500/[0.03] p-3">
                 <div className="text-xs font-medium text-amber-300 mb-1">Väntar på vårt svar ({ours.length})</div>
                 <div className="text-[11px] text-slate-500 mb-2">De har skrivit – vi behöver svara.</div>
@@ -308,6 +309,16 @@ export default function ButikerPage() {
                 <div className="text-xs font-medium text-cyan-300 mb-1">Väntar på deras svar ({theirs.length})</div>
                 <div className="text-[11px] text-slate-500 mb-2">Vi har skickat paketet. Rött = tyst i {STALE_DAYS}+ dagar, dags att höra av sig.</div>
                 {theirs.length === 0 ? <div className="text-sm text-slate-600 px-2">Inga.</div> : theirs.map((l) => <Row key={l.id} l={l} kind="theirs" />)}
+              </div>
+              <div className="rounded-lg border border-orange-500/20 bg-orange-500/[0.03] p-3">
+                <div className="text-xs font-medium text-orange-300 mb-1">Avvakta ({onHold.length})</div>
+                <div className="text-[11px] text-slate-500 mb-2">Parkerade – svara inte förrän vi bestämt hur.</div>
+                {onHold.length === 0 ? <div className="text-sm text-slate-600 px-2">Inga.</div> : onHold.map((l) => (
+                  <button key={l.id} onClick={() => openShop(l)} className="w-full text-left flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-white/[0.04]">
+                    <span className="text-sm text-white truncate flex-1">{l.name}<span className="text-slate-500 text-xs"> · {l.city ?? "–"}</span></span>
+                    <span className="text-xs text-orange-300/80 whitespace-nowrap">{mailStat.get(l.id)?.lastInAt ? `svarade ${dateSv(mailStat.get(l.id)!.lastInAt!)}` : ""}</span>
+                  </button>
+                ))}
               </div>
             </div>
           </div>
