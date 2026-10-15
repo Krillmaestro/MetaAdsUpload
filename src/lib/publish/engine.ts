@@ -73,7 +73,12 @@ const LOCK_STALE_MS = 2 * 60 * 1000;
 
 const backoffMs = (attempt: number) => Math.min(15_000 * 2 ** Math.max(0, attempt - 1), 10 * 60 * 1000);
 const isImage = (name: string) => /\.(jpg|jpeg|png|webp)$/i.test(name);
-const adNameFor = (fileName: string, lpIdx: number, lpCount: number) => `${fileName.replace(/\.[^.]+$/, "").replace(/^\d{10,}-/, "")}${lpCount > 1 ? ` LP${lpIdx + 1}` : ""}`;
+// "H1.png" alone says nothing in Ads Manager: name it "H1 <ad set>" like the Upload page does.
+const adNameFor = (fileName: string, lpIdx: number, lpCount: number, adsetName?: string) => {
+  const stem = fileName.replace(/\.[^.]+$/, "").replace(/^\d{10,}-/, "");
+  const base = /^H\d+$/i.test(stem) && adsetName ? `${stem.toUpperCase()} ${adsetName}` : stem;
+  return `${base}${lpCount > 1 ? ` LP${lpIdx + 1}` : ""}`;
+};
 
 /** Meta errors that retrying will not fix: bad parameters, permissions, policy. */
 function isPermanent(err: unknown): boolean {
@@ -380,7 +385,7 @@ async function step(job: PublishJob, deadline: number): Promise<Outcome> {
           const key = `${f.versionId}|${i}`;
           if (state.ads[key]) continue;
           if (Date.now() > deadline - 8_000) { await commit(); return "advanced"; }
-          const adName = adNameFor(f.name, i, lps.length);
+          const adName = adNameFor(f.name, i, lps.length, state.adsetName);
           existing ??= await getAds(state.adsetId!, 500);
           const dup = existing.find((a) => a.name === adName);
           if (dup) { state.ads[key] = { adId: dup.id, creativeId: dup.creative?.id ?? "", adName, landingPage: lps[i] }; pushLog(state, `Ad reused: ${adName}`); await commit(); continue; }
