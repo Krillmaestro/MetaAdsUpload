@@ -12,7 +12,7 @@ import { db, schema } from "@/db";
 import { and, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { createCampaign, getCampaigns } from "@/lib/meta/campaigns";
 import { createAdSet, getAdSets } from "@/lib/meta/adsets";
-import { createAd, getAdPostId, getAds } from "@/lib/meta/ads";
+import { createAd, createAdWithTextOptions, getAdPostId, getAds } from "@/lib/meta/ads";
 import { createAdCreative, uploadImage, getVideoThumbnail } from "@/lib/meta/creatives";
 import { metaApi, getAdAccountId, getPageId, getPixelId, MetaApiError } from "@/lib/meta/client";
 import { applyLinks } from "@/lib/learning-loop/link";
@@ -273,10 +273,11 @@ async function step(job: PublishJob, deadline: number): Promise<Outcome> {
             daily_budget: state.budgetType !== "CBO" ? (cfg.dailyBudget || 5000) : undefined,
             targeting: cfg.targeting || { geo_locations: { countries: [cc] } },
             optimization_goal: cfg.optimizationGoal || "OFFSITE_CONVERSIONS", billing_event: "IMPRESSIONS",
-            bid_strategy: cfg.bidStrategy || "LOWEST_COST_WITHOUT_CAP", status: "PAUSED",
+            // CBO: bid strategy lives on the campaign, like the Upload page
+            bid_strategy: state.budgetType === "CBO" ? undefined : (cfg.bidStrategy || "LOWEST_COST_WITHOUT_CAP"), status: "PAUSED",
             promoted_object: state.pixelId ? { pixel_id: state.pixelId, custom_event_type: cfg.conversionEvent || "PURCHASE" } : undefined,
-            url_tags: "utm_source=fb&utm_medium=paid&utm_campaign={{campaign.id}}&utm_term={{adset.id}}&utm_content={{ad.id}}",
-          });
+            ...((cfg.optimizationGoal || "OFFSITE_CONVERSIONS") === "OFFSITE_CONVERSIONS" ? { destination_type: "WEBSITE" } : {}),
+          } as Parameters<typeof createAdSet>[0]);
           state.adsetId = adset.id; pushLog(state, `Ad set created: ${state.adsetName}`);
         }
       }
@@ -354,32 +355,39 @@ async function step(job: PublishJob, deadline: number): Promise<Outcome> {
           const dup = existing.find((a) => a.name === adName);
           if (dup) { state.ads[key] = { adId: dup.id, creativeId: dup.creative?.id ?? "", adName, landingPage: lps[i] }; pushLog(state, `Ad reused: ${adName}`); await commit(); continue; }
 
-          let creative: { id: string };
-          if (cfg.sourcePostId) {
-            creative = await createAdCreative({ name: adName, object_story_id: cfg.sourcePostId });
+          const m = cfg.sourcePostId ? undefined : state.media?.[f.versionId];
+          if (!cfg.sourcePostId && !m) throw new Error(`No media for ${f.name}`);
+          let ad: { id: string };
+          let creativeId = "";
+          if (!cfg.sourcePostId && (copy.headlines.length > 1 || copy.primaryTexts.length > 1)) {
+            // Several texts: Flexible Ads (creative_asset_groups_spec), exactly as
+            // the Upload page does. asset_feed_spec would need a dynamic-creative
+            // ad set and Meta rejects it on ordinary ad sets.
+            ad = await createAdWithTextOptions({
+              adset_id: state.adsetId!, name: adName, page_id: state.pageId!, status: "PAUSED",
+              headlines: copy.headlines, primaryTexts: copy.primaryTexts,
+              imageHash: m!.imageHash, videoId: m!.videoId, videoThumbnailUrl: m!.thumbnailUrl,
+              linkUrl: lps[i], ctaType: copy.ctaType,
+            });
           } else {
-            const m = state.media?.[f.versionId];
-            if (!m) throw new Error(`No media for ${f.name}`);
-            const payload: Record<string, unknown> = { name: adName, object_story_spec: { page_id: state.pageId } };
-            if (m.videoId) {
-              const vd: Record<string, unknown> = { video_id: m.videoId, message: copy.primaryTexts[0] || "", title: copy.headlines[0] || "", call_to_action: { type: copy.ctaType, value: { link: lps[i] } } };
-              if (m.thumbnailUrl) vd.image_url = m.thumbnailUrl;
-              (payload.object_story_spec as Record<string, unknown>).video_data = vd;
+            let creative: { id: string };
+            if (cfg.sourcePostId) {
+              creative = await createAdCreative({ name: adName, object_story_id: cfg.sourcePostId });
             } else {
-              (payload.object_story_spec as Record<string, unknown>).link_data = { link: lps[i], message: copy.primaryTexts[0] || "", name: copy.headlines[0] || "", description: copy.descriptions[0] || "", image_hash: m.imageHash, call_to_action: { type: copy.ctaType } };
+              const payload: Record<string, unknown> = { name: adName, object_story_spec: { page_id: state.pageId } };
+              if (m!.videoId) {
+                const vd: Record<string, unknown> = { video_id: m!.videoId, message: copy.primaryTexts[0] || "", title: copy.headlines[0] || "", call_to_action: { type: copy.ctaType, value: { link: lps[i] } } };
+                if (m!.thumbnailUrl) vd.image_url = m!.thumbnailUrl;
+                (payload.object_story_spec as Record<string, unknown>).video_data = vd;
+              } else {
+                (payload.object_story_spec as Record<string, unknown>).link_data = { link: lps[i], message: copy.primaryTexts[0] || "", name: copy.headlines[0] || "", description: copy.descriptions[0] || "", image_hash: m!.imageHash, call_to_action: { type: copy.ctaType } };
+              }
+              creative = await createAdCreative(payload as Parameters<typeof createAdCreative>[0]);
             }
-            if (copy.headlines.length > 1 || copy.primaryTexts.length > 1) {
-              payload.asset_feed_spec = {
-                ...(copy.headlines.length ? { titles: copy.headlines.map((t) => ({ text: t })) } : {}),
-                ...(copy.primaryTexts.length ? { bodies: copy.primaryTexts.map((t) => ({ text: t })) } : {}),
-                ...(copy.descriptions.length ? { descriptions: copy.descriptions.map((t) => ({ text: t })) } : {}),
-                optimization_type: "DEGREES_OF_FREEDOM",
-              };
-            }
-            creative = await createAdCreative(payload as Parameters<typeof createAdCreative>[0]);
+            creativeId = creative.id;
+            ad = await createAd({ adset_id: state.adsetId!, name: adName, creative: { creative_id: creative.id }, status: "PAUSED" });
           }
-          const ad = await createAd({ adset_id: state.adsetId!, name: adName, creative: { creative_id: creative.id }, status: "PAUSED" });
-          state.ads[key] = { adId: ad.id, creativeId: creative.id, adName, landingPage: lps[i] };
+          state.ads[key] = { adId: ad.id, creativeId, adName, landingPage: lps[i] };
           pushLog(state, `Ad created: ${adName}`);
           await commit();
         }

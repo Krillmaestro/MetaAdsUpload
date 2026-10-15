@@ -35,7 +35,7 @@ export const AREAS: AreaDef[] = [
   { key: "upload", label: "Upload", href: "/upload", group: "Launch", paths: ["/upload", "/upload-log"], apis: ["/api/meta", "/api/upload", "/api/upload-jobs", "/api/r2", "/api/library", "/api/templates", "/api/gdrive", "/api/users", "/api/assignments", "/api/ad-owner"] },
   { key: "templates", label: "Templates", href: "/templates", group: "Launch", apis: ["/api/templates", "/api/meta"] },
   { key: "creatives", label: "Creatives", href: "/creatives", group: "Launch", apis: ["/api/library", "/api/r2", "/api/upload", "/api/meta"] },
-  { key: "assignments", label: "Assignments", href: "/assignments", group: "Workflow", apis: ["/api/assignments", "/api/brief-templates", "/api/users", "/api/options", "/api/upload", "/api/review", "/api/meta", "/api/templates"] },
+  { key: "assignments", label: "Assignments", href: "/assignments", group: "Workflow", apis: ["/api/assignments", "/api/brief-templates", "/api/users", "/api/options", "/api/upload", "/api/review", "/api/meta", "/api/templates", "/api/publish-jobs"] },
   { key: "my-work", label: "My Work", href: "/my-work", group: "Workflow", apis: ["/api/assignments", "/api/upload", "/api/work", "/api/time-entries"], editorDefault: true },
   { key: "review", label: "Review", href: "/review", group: "Workflow", apis: ["/api/assignments", "/api/review", "/api/upload"], editorDefault: true },
   { key: "timer", label: "Timer", href: "/timer", group: "Workflow", apis: ["/api/time-entries", "/api/work", "/api/assignments"], editorDefault: true },
