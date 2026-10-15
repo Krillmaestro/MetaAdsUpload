@@ -14,7 +14,8 @@ import { createCampaign, getCampaigns } from "@/lib/meta/campaigns";
 import { createAdSet, getAdSets } from "@/lib/meta/adsets";
 import { createAd, createAdWithTextOptions, getAdPostId, getAds } from "@/lib/meta/ads";
 import { createAdCreative, uploadImage, getVideoThumbnail } from "@/lib/meta/creatives";
-import { metaApi, getAdAccountId, getPageId, getPixelId, MetaApiError } from "@/lib/meta/client";
+import { metaApi, getAdAccountId, getPageId, getPixelId, MetaApiError, withAdAccount } from "@/lib/meta/client";
+import { countriesForSelection } from "@/lib/meta/geo";
 import { applyLinks } from "@/lib/learning-loop/link";
 import { listDeliverableFiles, APPROVED } from "@/lib/deliverables";
 import type { PublishJobState } from "@/db/schema";
@@ -40,6 +41,20 @@ export interface PublishConfig {
   landingPages: string[];
   versionIds?: string[];
   sourcePostId?: string;
+  /** The template's ad account — every Meta call of the job runs there. */
+  adAccountId?: string | null;
+}
+
+// Assignment countries are stored as "USA"/"UK"; Meta wants ISO-2 ("US"/"GB").
+const ISO2: Record<string, string> = { USA: "US", UK: "GB", SWE: "SE", NOR: "NO", DEN: "DK", DNK: "DK", FIN: "FI", AUS: "AU", CAN: "CA", NZL: "NZ", GBR: "GB" };
+export function metaCountries(codes: Array<string | null | undefined>): string[] {
+  const out = new Set<string>();
+  for (const raw of codes) {
+    const c = (raw ?? "").trim().toUpperCase();
+    if (!c) continue;
+    for (const x of countriesForSelection(c)) out.add(ISO2[x] ?? x);
+  }
+  return [...out];
 }
 
 export const STEP_ORDER = ["preflight", "campaign", "adset", "media", "ads", "finalize", "done"] as const;
@@ -108,6 +123,11 @@ export async function createPublishJob(assignmentId: string, config: PublishConf
   if (notApproved.length) throw new Error(`${notApproved.map((f) => f.hookLabel ?? f.filename).join(", ")} är inte godkänd`);
   if (!selected.length) throw new Error("No approved files to upload");
 
+  if (config.templateId && config.adAccountId === undefined) {
+    const [t] = await db.select({ adAccountId: schema.templates.adAccountId }).from(schema.templates).where(eq(schema.templates.id, config.templateId));
+    config = { ...config, adAccountId: t?.adAccountId ?? null };
+  }
+
   const state: PublishJobState = {
     files: selected.map((f) => ({ versionId: f.id, name: f.filename, type: isImage(f.filename) ? "image" : "video", url: f.r2Url, hookLabel: f.hookLabel })),
     landingPages: config.landingPages.map((l) => l.trim()).filter(Boolean),
@@ -146,7 +166,7 @@ export async function runJob(jobId: string, budgetMs = 40_000): Promise<PublishJ
   const deadline = Date.now() + budgetMs;
   try {
     while (Date.now() < deadline && job.step !== "done") {
-      const outcome = await step(job, deadline);
+      const outcome = await withAdAccount((job.config as unknown as PublishConfig).adAccountId, () => step(job, deadline));
       if (outcome === "waiting") { await save(job, { status: "waiting", lockedAt: null, lockToken: null }); return job; }
       if (outcome === "done") break;
     }
@@ -216,9 +236,12 @@ async function step(job: PublishJob, deadline: number): Promise<Outcome> {
       state.pixelId = (await getPixelId()) ?? undefined;
       // copy
       let headlines = cfg.headlines ?? [], primaryTexts = cfg.primaryTexts ?? [], descriptions = cfg.descriptions ?? [], ctaType = cfg.ctaType || "SHOP_NOW";
+      let tplTargeting: { countries?: string[]; ageMin?: number | null; ageMax?: number | null; genders?: number[] | null } = {};
       if (cfg.templateId) {
         const [t] = await db.select().from(schema.templates).where(eq(schema.templates.id, cfg.templateId));
         if (t) {
+          if (t.pixelId) state.pixelId = t.pixelId;
+          tplTargeting = { countries: (t.targetCountries as string[] | null) ?? undefined, ageMin: t.ageMin, ageMax: t.ageMax, genders: (t.genders as number[] | null) ?? null };
           if (!headlines.length) headlines = (t.headlines as string[]) || [];
           if (!primaryTexts.length) primaryTexts = (t.primaryTexts as string[]) || [];
           if (!descriptions.length) descriptions = (t.descriptions as string[]) || [];
@@ -242,7 +265,14 @@ async function step(job: PublishJob, deadline: number): Promise<Outcome> {
       const country = assignment.countryId ? (await db.select().from(schema.countries).where(eq(schema.countries.id, assignment.countryId)))[0] : null;
       state.adsetName = cfg.adsetName || assignment.autoName || assignment.title;
       pushLog(state, `Preflight ok · ${state.files?.length} files · ${state.budgetType} · page ${state.pageId}`);
-      (state as PublishJobState & { countryCode?: string }).countryCode = country?.code || "SE";
+      const countries = metaCountries(tplTargeting.countries?.length ? tplTargeting.countries : [country?.code || "SE"]);
+      (state as PublishJobState & { countryCode?: string }).countryCode = countries.length === 1 ? countries[0] : (metaCountries([country?.code])[0] ?? countries[0]);
+      (state as PublishJobState & { targeting?: Record<string, unknown> }).targeting = {
+        geo_locations: { countries },
+        age_min: tplTargeting.ageMin ?? 18, age_max: tplTargeting.ageMax ?? 65,
+        ...(tplTargeting.genders?.length ? { genders: tplTargeting.genders } : {}),
+        targeting_automation: { advantage_audience: 1 },
+      };
       await commit("campaign");
       return "advanced";
     }
@@ -271,7 +301,7 @@ async function step(job: PublishJob, deadline: number): Promise<Outcome> {
           const adset = await createAdSet({
             campaign_id: state.campaignId!, name: state.adsetName!,
             daily_budget: state.budgetType !== "CBO" ? (cfg.dailyBudget || 5000) : undefined,
-            targeting: cfg.targeting || { geo_locations: { countries: [cc] } },
+            targeting: cfg.targeting || (state as PublishJobState & { targeting?: Record<string, unknown> }).targeting || { geo_locations: { countries: [cc] } },
             optimization_goal: cfg.optimizationGoal || "OFFSITE_CONVERSIONS", billing_event: "IMPRESSIONS",
             // CBO: bid strategy lives on the campaign, like the Upload page
             bid_strategy: state.budgetType === "CBO" ? undefined : (cfg.bidStrategy || "LOWEST_COST_WITHOUT_CAP"), status: "PAUSED",
