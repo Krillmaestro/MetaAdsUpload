@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
+import { AccountSwitcher } from "@/components/layout/account-switcher";
 import {
   LayoutDashboard,
   Upload,
@@ -94,6 +95,11 @@ function SidebarContent({ onNavClick, areas, editorSlug, home }: { onNavClick?: 
         >
           MetaAds
         </Link>
+      </div>
+
+      {/* Active ad account + pixel (admins) */}
+      <div className="px-3">
+        <AccountSwitcher />
       </div>
 
       {/* Navigation */}
