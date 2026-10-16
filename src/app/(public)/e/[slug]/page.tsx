@@ -301,7 +301,7 @@ export default function PublicEditorPage({ params }: { params: Promise<{ slug: s
 
           {/* Ad sets (expandable → per-ad) */}
           <div className="rounded-2xl border border-white/5 bg-[#111827] overflow-hidden">
-            <div className="flex items-center gap-2 px-5 py-4 border-b border-white/5"><Layers className="h-4 w-4 text-cyan-400" /><h2 className="text-sm font-semibold text-white">Your ad sets ({editor.adsetCount}) — click to see each ad</h2></div>
+            <div className="flex items-center gap-2 px-5 py-4 border-b border-white/5"><Layers className="h-4 w-4 text-cyan-400" /><h2 className="text-sm font-semibold text-white">Your ad sets ({editor.adsetCount}) — click to see each ad</h2><span className="ml-auto text-[11px] text-slate-500">Spend/ROAS columns = selected period · bonus = lifetime</span></div>
             <div className="divide-y divide-white/5">
               {editor.adsets.length === 0 && <p className="px-5 py-10 text-center text-sm text-slate-600">No ad sets assigned to you yet.</p>}
               {editor.adsets.map((s) => {
@@ -313,6 +313,7 @@ export default function PublicEditorPage({ params }: { params: Promise<{ slug: s
                       <div className="flex-1 min-w-0">
                         <p className="text-sm text-slate-200 truncate">{s.adsetName}</p>
                         <p className="text-[11px] text-slate-500">{s.adCount} ads
+                          {s.lifetimeSpend > 0 && <span> · lifetime ${fmt(s.lifetimeSpend)} · {s.lifetimeRoas.toFixed(2)}x</span>}
                           {s.graveyardOutcome === "spend_winner" && <span className="text-blue-400"> · ⚰ spend winner</span>}
                           {s.graveyardOutcome === "loser" && <span className="text-red-400"> · ⚰ loser</span>}
                         </p>
