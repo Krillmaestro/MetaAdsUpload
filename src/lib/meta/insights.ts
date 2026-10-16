@@ -104,7 +104,15 @@ export async function getAdInsightsById(
   });
 }
 
-/** Per-ad daily insights for ONE ad set (/{adsetId}/insights?level=ad). One call → all ads in the set. */
+// Every delivery state an ad can be in. Meta's insights edge silently drops
+// ARCHIVED and DELETED ads unless asked for them, which hid the whole history of
+// graveyarded/old ad sets from the editor pages.
+export const ALL_AD_STATUSES = [
+  "ACTIVE", "PAUSED", "ARCHIVED", "DELETED", "CAMPAIGN_PAUSED", "ADSET_PAUSED",
+  "DISAPPROVED", "WITH_ISSUES", "IN_PROCESS", "PENDING_REVIEW",
+];
+
+/** Per-ad daily insights for ONE ad set (/{adsetId}/insights?level=ad). One call → all ads in the set, archived and deleted included. */
 export async function getAdsetInsightsByAd(
   adsetId: string,
   dateRange: { since: string; until: string },
@@ -116,6 +124,7 @@ export async function getAdsetInsightsByAd(
       level: "ad",
       time_increment: timeIncrement,
       time_range: JSON.stringify(dateRange),
+      filtering: JSON.stringify([{ field: "ad.effective_status", operator: "IN", value: ALL_AD_STATUSES }]),
     },
     strict: true,
   });

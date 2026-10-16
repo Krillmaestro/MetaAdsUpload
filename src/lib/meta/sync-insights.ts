@@ -11,12 +11,13 @@ import {
   extractPurchaseValue,
   calculateROAS,
   extractThruplays,
+  ALL_AD_STATUSES,
   type InsightData,
 } from "./insights";
 import { getCampaigns } from "./campaigns";
 import { getAdSets } from "./adsets";
-import { getAds } from "./ads";
-import { metaApi, resolveAccount, withAdAccount, getAdAccountId } from "./client";
+import { getAds, type Ad } from "./ads";
+import { metaApi, metaApiPaginated, resolveAccount, withAdAccount, getAdAccountId } from "./client";
 
 /**
  * Ad set metadata → adsets_cache for the CURRENT account context (call inside
@@ -244,7 +245,15 @@ export async function runEditorInsightsSync() {
       }
 
       // Refresh ad metadata (names + ad→adset mapping) for this ad set.
-      const ads = await getAds(adsetId, 200);
+      // Archived/deleted ads too — without them in ads_cache their insights
+      // never join to the ad set on the editor pages.
+      const ads = await metaApiPaginated<Ad>(`/${adsetId}/ads`, {
+        params: {
+          fields: "id,adset_id,campaign_id,name,status,creative{id,video_id,image_hash}",
+          limit: 200,
+          filtering: JSON.stringify([{ field: "effective_status", operator: "IN", value: ALL_AD_STATUSES }]),
+        },
+      });
       const adsetAdIds = new Set<string>();
       for (const ad of ads) {
         adsetAdIds.add(ad.id);
