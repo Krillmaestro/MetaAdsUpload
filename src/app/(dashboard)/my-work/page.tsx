@@ -106,21 +106,6 @@ interface PendingUpload {
   replaces: Record<number, string>;
 }
 
-interface AdInsight {
-  assignmentId: string;
-  adId: string;
-  autoName: string;
-  spend: number;
-  impressions: number;
-  purchases: number;
-  purchaseValue: number;
-  roas: number;
-  cpa: number;
-  ctr: number;
-  cpc: number;
-  cpm: number;
-}
-
 const FORMAT_ICONS: Record<string, React.ElementType> = {
   STATIC: Image,
   UGC: Video,
@@ -157,9 +142,6 @@ export default function MyWorkPage() {
   const [videoLengthModalId, setVideoLengthModalId] = useState<string | null>(null);
   const [videoLengthInput, setVideoLengthInput] = useState("");
 
-  // Performance insights
-  const [insights, setInsights] = useState<AdInsight[]>([]);
-  const [insightsLoading, setInsightsLoading] = useState(false);
 
   const fetchAssignments = useCallback(async () => {
     setLoading(true);
@@ -176,23 +158,7 @@ export default function MyWorkPage() {
     }
   }, []);
 
-  const fetchInsights = useCallback(async () => {
-    setInsightsLoading(true);
-    try {
-      const res = await fetch("/api/assignments/my/insights");
-      if (res.ok) {
-        const json = await res.json();
-        setInsights(json.insights || []);
-      }
-    } catch {
-      // Silently fail - insights are optional
-    } finally {
-      setInsightsLoading(false);
-    }
-  }, []);
-
   useEffect(() => { fetchAssignments(); }, [fetchAssignments]);
-  useEffect(() => { fetchInsights(); }, [fetchInsights]);
 
   // Fetch the list of uploaded deliverable files for an assignment
   const fetchVersions = useCallback(async (assignmentId: string) => {
@@ -582,10 +548,6 @@ export default function MyWorkPage() {
     );
   };
 
-  const getInsightForAssignment = (assignmentId: string): AdInsight | undefined => {
-    return insights.find((i) => i.assignmentId === assignmentId);
-  };
-
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -598,7 +560,7 @@ export default function MyWorkPage() {
           <p className="text-sm text-slate-500 mt-0.5">Your assigned video and graphic tasks</p>
         </div>
         <button
-          onClick={() => { fetchAssignments(); fetchInsights(); }}
+          onClick={() => { fetchAssignments(); }}
           className="flex items-center gap-2 px-4 py-2 rounded-lg bg-white/5 border border-white/10 text-sm text-slate-300 hover:bg-white/10 transition-all"
         >
           <RefreshCw className="h-4 w-4" /> Refresh

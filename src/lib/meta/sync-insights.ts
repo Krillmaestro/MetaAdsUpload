@@ -1,9 +1,20 @@
 // Shared insights sync — used by the cron route (GET/POST) and the admin
 // "Sync now" button. Pulls daily campaign + ad insights (with video metrics)
 // from Meta into the insights table, and refreshes campaign/ad metadata caches.
+//
+// Two jobs, split so each fits a Vercel function:
+//  - runSync():               every account, the rolling window, account-wide
+//                             (a handful of Meta calls per account). This is
+//                             what keeps editor numbers current — archived and
+//                             deleted ads included.
+//  - runEditorInsightsSync(): lifetime BACKFILL of owned ad sets that have not
+//                             been backfilled yet (bonuses are lifetime), then
+//                             a ledger refresh.
+// All writes are bulk upserts on (entity_type, entity_id, date_start), so a
+// re-run or an overlapping run can never double a day.
 
 import { db, schema } from "@/db";
-import { and, eq, gte, lte, inArray, isNotNull, isNull, or, count as sqlCount } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import {
   getInsights,
   getAdsetInsightsByAd,
@@ -11,13 +22,27 @@ import {
   extractPurchaseValue,
   calculateROAS,
   extractThruplays,
-  ALL_AD_STATUSES,
   type InsightData,
 } from "./insights";
 import { getCampaigns } from "./campaigns";
 import { getAdSets } from "./adsets";
-import { getAds, type Ad } from "./ads";
+import { type Ad } from "./ads";
 import { metaApi, metaApiPaginated, resolveAccount, withAdAccount, getAdAccountId } from "./client";
+import { withLock } from "@/lib/sync-lock";
+import { refreshBonusLedger } from "@/lib/bonus-ledger";
+
+const WRITE_CHUNK = 500;
+
+function chunks<T>(arr: T[], size = WRITE_CHUNK): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
+/** Excluded-column assignments for an upsert: every listed column takes the incoming value. */
+function excludedSet(cols: Record<string, string>) {
+  return Object.fromEntries(Object.entries(cols).map(([key, col]) => [key, sql.raw(`excluded.${col}`)]));
+}
 
 /**
  * Ad set metadata → adsets_cache for the CURRENT account context (call inside
@@ -27,26 +52,35 @@ import { metaApi, metaApiPaginated, resolveAccount, withAdAccount, getAdAccountI
 export async function syncAdsetsCache(): Promise<number> {
   const adAccountId = await getAdAccountId();
   const adsets = await getAdSets(undefined, 500);
-  for (const s of adsets) {
-    const values = {
-      adAccountId,
-      campaignId: s.campaign_id,
-      name: s.name,
-      status: s.status,
-      effectiveStatus: s.effective_status ?? null,
-      dailyBudget: s.daily_budget ? parseFloat(s.daily_budget) / 100 : null,
-      lifetimeBudget: s.lifetime_budget ? parseFloat(s.lifetime_budget) / 100 : null,
-      optimizationGoal: s.optimization_goal ?? null,
-      billingEvent: s.billing_event ?? null,
-      bidStrategy: s.bid_strategy ?? null,
-      startTime: s.start_time ? new Date(s.start_time) : null,
-      endTime: s.end_time ? new Date(s.end_time) : null,
-      createdTime: s.created_time ? new Date(s.created_time) : null,
-      syncedAt: new Date(),
-    };
-    await db.insert(schema.adsetsCache)
-      .values({ id: s.id, targeting: (s.targeting ?? {}) as Record<string, unknown>, ...values })
-      .onConflictDoUpdate({ target: schema.adsetsCache.id, set: values });
+  const now = new Date();
+  const rows = adsets.map((s) => ({
+    id: s.id,
+    targeting: (s.targeting ?? {}) as Record<string, unknown>,
+    adAccountId,
+    campaignId: s.campaign_id,
+    name: s.name,
+    status: s.status,
+    effectiveStatus: s.effective_status ?? null,
+    dailyBudget: s.daily_budget ? parseFloat(s.daily_budget) / 100 : null,
+    lifetimeBudget: s.lifetime_budget ? parseFloat(s.lifetime_budget) / 100 : null,
+    optimizationGoal: s.optimization_goal ?? null,
+    billingEvent: s.billing_event ?? null,
+    bidStrategy: s.bid_strategy ?? null,
+    startTime: s.start_time ? new Date(s.start_time) : null,
+    endTime: s.end_time ? new Date(s.end_time) : null,
+    createdTime: s.created_time ? new Date(s.created_time) : null,
+    syncedAt: now,
+  }));
+  for (const chunk of chunks(rows)) {
+    await db.insert(schema.adsetsCache).values(chunk).onConflictDoUpdate({
+      target: schema.adsetsCache.id,
+      set: excludedSet({
+        adAccountId: "ad_account_id", campaignId: "campaign_id", name: "name", status: "status",
+        effectiveStatus: "effective_status", dailyBudget: "daily_budget", lifetimeBudget: "lifetime_budget",
+        optimizationGoal: "optimization_goal", billingEvent: "billing_event", bidStrategy: "bid_strategy",
+        startTime: "start_time", endTime: "end_time", createdTime: "created_time", syncedAt: "synced_at",
+      }),
+    });
   }
   return adsets.length;
 }
@@ -87,70 +121,56 @@ function toRow(row: InsightData, entityId: string, entityType: string, adAccount
 }
 
 /**
- * Replace all rows of an entityType within [since, until] with fresh data (bulk).
- * Scoped to ONE ad account — with multi-account sync, deleting globally would
- * wipe the other accounts' rows every run. `includeLegacyNull` widens the
- * delete to rows with a NULL ad_account_id (pre-stamping era) so the primary
- * account migrates its legacy rows instead of duplicating them forever.
+ * Bulk upsert on (entity_type, entity_id, date_start). Replaces the old
+ * delete-then-insert: nothing is ever cleared, so a failed or partial fetch
+ * can only leave a day stale (repaired next run), never missing or doubled.
  */
-async function replaceInsights(
-  entityType: string,
-  since: string,
-  until: string,
-  rows: InsightRow[],
-  adAccountId: string | null,
-  includeLegacyNull: boolean,
-) {
-  const accountScope = adAccountId
-    ? includeLegacyNull
-      ? or(eq(schema.insights.adAccountId, adAccountId), isNull(schema.insights.adAccountId))
-      : eq(schema.insights.adAccountId, adAccountId)
-    : isNull(schema.insights.adAccountId);
-  // Day-by-day delete+insert (oldest first): the HTTP driver has no
-  // transactions, so a mid-run timeout must never leave a large half-deleted
-  // window — at worst ONE day goes missing and tomorrow's run repairs it.
-  const byDay = new Map<string, InsightRow[]>();
-  for (const r of rows) {
-    const d = String(r.dateStart);
-    byDay.set(d, [...(byDay.get(d) ?? []), r]);
+async function upsertInsights(rows: InsightRow[]): Promise<number> {
+  // Postgres rejects an upsert that touches the same key twice in one
+  // statement — keep the last occurrence per key.
+  const byKey = new Map<string, InsightRow>();
+  for (const r of rows) byKey.set(`${r.entityType}|${r.entityId}|${r.dateStart}`, r);
+  const unique = [...byKey.values()];
+  for (const chunk of chunks(unique)) {
+    await db.insert(schema.insights).values(chunk).onConflictDoUpdate({
+      target: [schema.insights.entityType, schema.insights.entityId, schema.insights.dateStart],
+      targetWhere: sql`breakdown_key IS NULL`,
+      set: {
+        ...excludedSet({
+          adAccountId: "ad_account_id", dateStop: "date_stop", spend: "spend", impressions: "impressions",
+          reach: "reach", clicks: "clicks", linkClicks: "link_clicks", ctr: "ctr", cpc: "cpc", cpm: "cpm",
+          purchases: "purchases", purchaseValue: "purchase_value", roas: "roas",
+          videoViews3s: "video_views_3s", videoThruplays: "video_thruplays",
+        }),
+        syncedAt: sql`now()`,
+      },
+    });
   }
-  const allDays = new Set<string>(byDay.keys());
-  // Also clear days in range that no longer have rows (e.g. data corrections)
-  for (let d = since; d <= until; d = new Date(new Date(`${d}T00:00:00Z`).getTime() + 86400000).toISOString().slice(0, 10)) {
-    allDays.add(d);
-  }
+  return unique.length;
+}
 
-  // A completely empty fetch for a window that currently holds data is almost
-  // always a failed call rather than the truth — Meta returning nothing for an
-  // account that was spending yesterday. Clearing on that basis destroys
-  // history for no gain, so skip instead. A genuinely empty window simply
-  // stays as it was until a fetch returns rows.
-  if (rows.length === 0) {
-    const [{ count } = { count: 0 }] = await db
-      .select({ count: sqlCount() })
-      .from(schema.insights)
-      .where(and(eq(schema.insights.entityType, entityType), gte(schema.insights.dateStart, since), lte(schema.insights.dateStart, until), accountScope));
-    if (Number(count) > 0) {
-      console.warn(
-        `replaceInsights: refusing to clear ${count} existing ${entityType} rows in ${since}..${until} — fetch returned nothing`
-      );
-      return;
-    }
+/**
+ * ads_cache rows for ads that only appear in insights (archived/deleted ads are
+ * not listed by /ads). Without a row their insights never join to an ad set.
+ * Existing rows are left alone — /ads metadata is richer.
+ */
+async function upsertAdStubs(data: InsightData[], adAccountId: string | null): Promise<void> {
+  const stubs = new Map<string, typeof schema.adsCache.$inferInsert>();
+  for (const r of data) {
+    if (!r.ad_id || !r.adset_id || stubs.has(r.ad_id)) continue;
+    stubs.set(r.ad_id, {
+      id: r.ad_id,
+      adAccountId,
+      adsetId: r.adset_id,
+      campaignId: r.campaign_id || "",
+      name: r.ad_name || r.ad_id,
+      // Every live ad is listed by /ads (upserted with its real status before
+      // this runs); one that only shows up here is archived or deleted.
+      status: "ARCHIVED",
+    });
   }
-  for (const day of [...allDays].sort()) {
-    await db.delete(schema.insights).where(
-      and(
-        eq(schema.insights.entityType, entityType),
-        eq(schema.insights.dateStart, day),
-        accountScope,
-      )
-    );
-    const dayRows = byDay.get(day) ?? [];
-    const CHUNK = 200;
-    for (let i = 0; i < dayRows.length; i += CHUNK) {
-      const slice = dayRows.slice(i, i + CHUNK);
-      if (slice.length) await db.insert(schema.insights).values(slice);
-    }
+  for (const chunk of chunks([...stubs.values()])) {
+    await db.insert(schema.adsCache).values(chunk).onConflictDoNothing({ target: schema.adsCache.id });
   }
 }
 
@@ -165,8 +185,11 @@ const BACKFILL_CHUNK_DAYS = 90;
  * single-shot version failed mid-pagination and cost real rows.
  */
 const AD_INSIGHT_CHUNK_DAYS = 7;
-const MAX_BACKFILLS_PER_RUN = 8; // keep a single run within Hobby function limits
 const MAX_HISTORY_DAYS = 1100; // Meta retains ~37 months of insights
+const DEFAULT_WINDOW_DAYS = 30; // attribution keeps moving for ~28 days
+
+/** Time budget per function run (maxDuration is 300s) — stop cleanly before the kill. */
+export const SYNC_BUDGET_MS = 240_000;
 
 function addDays(date: string, n: number): string {
   const d = new Date(`${date}T00:00:00Z`);
@@ -174,170 +197,100 @@ function addDays(date: string, n: number): string {
   return d.toISOString().split("T")[0];
 }
 
-/**
- * Targeted sync for the editor dashboard: pulls daily insights ONLY for the ad
- * sets that are assigned to an editor (adset_owners + published assignments).
- * For each owned ad set it refreshes ad metadata (names + ad→adset mapping) and
- * pulls per-ad daily insights. The first time an ad set is seen it backfills
- * the full lifetime (from the ad set's created_time) and records backfilledAt;
- * after that, only the rolling 30-day window is refreshed. Writes happen per ad
- * set so a timeout mid-run never loses completed work. Scales with owned ad
- * sets, not the whole (thousands-of-ads) account.
- */
-export async function runEditorInsightsSync() {
-  const account = await resolveAccount();
-  const adAccountId = account.adAccountId;
-  const today = new Date().toISOString().split("T")[0];
-  const windowSince = new Date(Date.now() - 30 * 86400000).toISOString().split("T")[0];
-  const oldestAllowed = new Date(Date.now() - MAX_HISTORY_DAYS * 86400000).toISOString().split("T")[0];
-
-  // source='demo' rows are fabricated showcase data — they don't exist in Meta,
-  // so they must never reach the API.
-  const owners = (await db.select().from(schema.adsetOwners)).filter((o) => o.source !== "demo");
-  const ownerByAdset = new Map(owners.map((o) => [o.adsetId, o]));
-  const assigns = await db
-    .select({ adsetId: schema.assignments.metaAdsetId })
-    .from(schema.assignments)
-    .where(isNotNull(schema.assignments.metaAdsetId));
-
-  const adsetIds = [...new Set([...owners.map((o) => o.adsetId), ...(assigns.map((a) => a.adsetId).filter(Boolean) as string[])])];
-  if (adsetIds.length === 0) return { adsets: 0, ads: 0, adInsightRows: 0, backfilled: 0, backfillsPending: 0 };
-
-  // Backfill the never-backfilled ad sets first so repeated manual runs make progress.
-  adsetIds.sort((a, b) => {
-    const aPending = ownerByAdset.has(a) && !ownerByAdset.get(a)!.backfilledAt ? 0 : 1;
-    const bPending = ownerByAdset.has(b) && !ownerByAdset.get(b)!.backfilledAt ? 0 : 1;
-    return aPending - bPending;
-  });
-
-  const allAdIds = new Set<string>();
-  const failed: string[] = [];
-  let totalRows = 0;
-  let backfillsDone = 0;
-
-  for (const adsetId of adsetIds) {
-    const ownerRow = ownerByAdset.get(adsetId);
-    const wantsBackfill = !!ownerRow && !ownerRow.backfilledAt;
-    const doBackfill = wantsBackfill && backfillsDone < MAX_BACKFILLS_PER_RUN;
-
-    try {
-      let since = windowSince;
-      // The ad set's own account — adset ids are global, so an owned US-account
-      // ad set syncs fine, but its rows must be stamped with ITS account, not
-      // the connection's active one.
-      let adsetAccountId = adAccountId;
-
-      // Keep the ad set's display name fresh; created_time bounds the backfill.
-      try {
-        const info = await metaApi<{ name?: string; created_time?: string; account_id?: string }>(`/${adsetId}`, { params: { fields: "name,created_time,account_id" } });
-        if (info?.account_id) adsetAccountId = formatAct(info.account_id);
-        if (info?.name && ownerRow) {
-          await db.update(schema.adsetOwners).set({ adsetName: info.name, updatedAt: new Date() }).where(eq(schema.adsetOwners.adsetId, adsetId));
-        }
-        if (doBackfill) {
-          const created = info?.created_time?.slice(0, 10);
-          since = created && created > oldestAllowed ? created : oldestAllowed;
-        }
-      } catch {
-        // Name/created_time are best-effort; a backfill without created_time
-        // falls back to the full retention window.
-        if (doBackfill) since = oldestAllowed;
-      }
-
-      // Refresh ad metadata (names + ad→adset mapping) for this ad set.
-      // Archived/deleted ads too — without them in ads_cache their insights
-      // never join to the ad set on the editor pages.
-      const ads = await metaApiPaginated<Ad>(`/${adsetId}/ads`, {
-        params: {
-          fields: "id,adset_id,campaign_id,name,status,creative{id,video_id,image_hash}",
-          limit: 200,
-          filtering: JSON.stringify([{ field: "effective_status", operator: "IN", value: ALL_AD_STATUSES }]),
-        },
-      });
-      const adsetAdIds = new Set<string>();
-      for (const ad of ads) {
-        adsetAdIds.add(ad.id);
-        await db.insert(schema.adsCache).values({
-          id: ad.id,
-          adAccountId: adsetAccountId,
-          adsetId: ad.adset_id || adsetId,
-          campaignId: ad.campaign_id || "",
-          name: ad.name,
-          status: ad.status,
-          creativeId: ad.creative?.id || null,
-          videoId: ad.creative?.video_id || null,
-          imageHash: ad.creative?.image_hash || null,
-        }).onConflictDoUpdate({
-          target: schema.adsCache.id,
-          set: {
-            name: ad.name, status: ad.status, adsetId: ad.adset_id || adsetId,
-            adAccountId: adsetAccountId,
-            creativeId: ad.creative?.id || null,
-            videoId: ad.creative?.video_id || null,
-            imageHash: ad.creative?.image_hash || null,
-            syncedAt: new Date(),
-          },
-        });
-      }
-
-      // Per-ad daily insights, chunked so lifetime backfills stay within Meta's
-      // limits on daily-granularity queries.
-      const rows: InsightRow[] = [];
-      let cursor = since;
-      while (cursor <= today) {
-        const chunkEnd = addDays(cursor, BACKFILL_CHUNK_DAYS - 1) < today ? addDays(cursor, BACKFILL_CHUNK_DAYS - 1) : today;
-        const data = await getAdsetInsightsByAd(adsetId, { since: cursor, until: chunkEnd }, 1);
-        for (const r of data) {
-          if (r.ad_id) { rows.push(toRow(r, r.ad_id, "ad", adsetAccountId)); adsetAdIds.add(r.ad_id); }
-        }
-        cursor = addDays(chunkEnd, 1);
-      }
-
-      // Replace this ad set's rows within the fetched range, then persist
-      // immediately — a later failure must not lose this ad set's data.
-      const adIdArr = [...adsetAdIds];
-      if (adIdArr.length) {
-        await db.delete(schema.insights).where(
-          and(
-            eq(schema.insights.entityType, "ad"),
-            inArray(schema.insights.entityId, adIdArr),
-            gte(schema.insights.dateStart, since),
-            lte(schema.insights.dateStop, today),
-          )
-        );
-      }
-      const CHUNK = 200;
-      for (let i = 0; i < rows.length; i += CHUNK) {
-        const slice = rows.slice(i, i + CHUNK);
-        if (slice.length) await db.insert(schema.insights).values(slice);
-      }
-
-      if (doBackfill) {
-        await db.update(schema.adsetOwners).set({ backfilledAt: new Date(), updatedAt: new Date() }).where(eq(schema.adsetOwners.adsetId, adsetId));
-        backfillsDone++;
-      }
-
-      totalRows += rows.length;
-      adIdArr.forEach((id) => allAdIds.add(id));
-    } catch (e) {
-      failed.push(adsetId);
-      console.error(`Insights fetch failed for ad set ${adsetId}:`, e instanceof Error ? e.message : e);
-    }
-  }
-
-  const backfillsPending = owners.filter((o) => !o.backfilledAt).length - backfillsDone;
-  return {
-    adsets: adsetIds.length,
-    ads: allAdIds.size,
-    adInsightRows: totalRows,
-    backfilled: backfillsDone,
-    backfillsPending: Math.max(backfillsPending, 0),
-    failed: failed.length,
-  };
+function daysAgo(n: number): string {
+  return new Date(Date.now() - n * 86400000).toISOString().split("T")[0];
 }
 
 function formatAct(id: string): string {
   return id.startsWith("act_") ? id : `act_${id}`;
+}
+
+/**
+ * Lifetime backfill for owned ad sets that have never been backfilled, then a
+ * bonus-ledger refresh. The rolling window is NOT refetched here — runSync
+ * already covers every account's ads (archived/deleted included), so per-ad-set
+ * window refreshes were ~3 duplicate Meta calls per owned ad set per night.
+ * Runs until the time budget is spent; whatever is left continues next run.
+ */
+export async function runEditorInsightsSync(opts: { deadline?: number } = {}) {
+  const deadline = opts.deadline ?? Date.now() + SYNC_BUDGET_MS;
+  const result = await withLock("insights-editor", 300, async () => {
+    const today = daysAgo(0);
+    const oldestAllowed = daysAgo(MAX_HISTORY_DAYS);
+
+    // Ad sets linked only through an assignment get an adset_owners row, so
+    // they are tracked (backfilledAt) like every other owned ad set. Same
+    // owner the assignment already implies — resolveOwnedAdsets is unchanged.
+    await db.execute(sql`
+      INSERT INTO adset_owners (adset_id, video_editor_id, creative_strategist_id, campaign_id, adset_name, source, updated_at)
+      SELECT DISTINCT ON (a.meta_adset_id) a.meta_adset_id, a.assigned_to_id, a.creative_strategist_id, a.meta_campaign_id, a.auto_name, 'assignment', now()
+      FROM assignments a
+      WHERE a.meta_adset_id IS NOT NULL AND a.meta_adset_id <> ''
+      ORDER BY a.meta_adset_id, a.updated_at DESC
+      ON CONFLICT (adset_id) DO NOTHING`);
+
+    // source='demo' rows are fabricated showcase data — never sent to the API.
+    const pending = await db
+      .select({ adsetId: schema.adsetOwners.adsetId })
+      .from(schema.adsetOwners)
+      .where(and(isNull(schema.adsetOwners.backfilledAt), sql`coalesce(${schema.adsetOwners.source}, '') <> 'demo'`));
+
+    let backfilled = 0;
+    let rowsWritten = 0;
+    const failed: string[] = [];
+
+    for (let i = 0; i < pending.length; i += 50) {
+      if (Date.now() > deadline) break;
+      const batch = pending.slice(i, i + 50).map((p) => p.adsetId);
+
+      // created_time bounds each backfill; account_id stamps the rows. One call per 50 ad sets.
+      let info: Record<string, { created_time?: string; account_id?: string; name?: string }> = {};
+      try {
+        info = await metaApi<typeof info>("/", { params: { ids: batch.join(","), fields: "name,created_time,account_id" } });
+      } catch (e) {
+        console.error("Ad set info batch failed:", e instanceof Error ? e.message : e);
+      }
+
+      for (const adsetId of batch) {
+        if (Date.now() > deadline) break;
+        const meta = info[adsetId];
+        const created = meta?.created_time?.slice(0, 10);
+        const since = created && created > oldestAllowed ? created : oldestAllowed;
+        const adsetAccountId = meta?.account_id ? formatAct(meta.account_id) : null;
+        try {
+          const data: InsightData[] = [];
+          for (let cursor = since; cursor <= today; ) {
+            const end = addDays(cursor, BACKFILL_CHUNK_DAYS - 1) < today ? addDays(cursor, BACKFILL_CHUNK_DAYS - 1) : today;
+            data.push(...(await getAdsetInsightsByAd(adsetId, { since: cursor, until: end }, 1)));
+            cursor = addDays(end, 1);
+          }
+          await upsertAdStubs(data, adsetAccountId);
+          rowsWritten += await upsertInsights(
+            data.filter((r) => r.ad_id).map((r) => toRow(r, r.ad_id!, "ad", adsetAccountId))
+          );
+          await db
+            .update(schema.adsetOwners)
+            .set({ backfilledAt: new Date(), updatedAt: new Date(), ...(meta?.name ? { adsetName: meta.name } : {}) })
+            .where(eq(schema.adsetOwners.adsetId, adsetId));
+          backfilled++;
+        } catch (e) {
+          // Not marked backfilled → retried next run. Nothing was deleted.
+          failed.push(adsetId);
+          console.error(`Backfill failed for ad set ${adsetId}:`, e instanceof Error ? e.message : e);
+        }
+      }
+    }
+
+    const ledger = await refreshBonusLedger();
+    return {
+      backfilled,
+      backfillsPending: Math.max(pending.length - backfilled, 0),
+      adInsightRows: rowsWritten,
+      failed: failed.length,
+      ledger,
+    };
+  });
+  return result ?? { skipped: "another sync is running" };
 }
 
 /**
@@ -351,62 +304,65 @@ function formatAct(id: string): string {
 async function accountsToSync(activeAdAccountId: string | null): Promise<string[]> {
   const set = new Set<string>();
   if (activeAdAccountId) set.add(formatAct(activeAdAccountId));
-  const tpl = await db
-    .selectDistinct({ act: schema.templates.adAccountId })
-    .from(schema.templates)
-    .where(isNotNull(schema.templates.adAccountId));
-  for (const t of tpl) if (t.act) set.add(formatAct(t.act));
-  const hist = await db
-    .selectDistinct({ act: schema.insights.adAccountId })
-    .from(schema.insights)
-    .where(isNotNull(schema.insights.adAccountId));
-  for (const h of hist) if (h.act) set.add(formatAct(h.act));
-  // ads_cache covers accounts that have ads but no delivery yet (e.g. a fresh
-  // US account right after its first uploads) — without this they'd stay
-  // invisible until the first insights row exists, which requires this sync.
-  const cached = await db
-    .selectDistinct({ act: schema.adsCache.adAccountId })
-    .from(schema.adsCache)
-    .where(isNotNull(schema.adsCache.adAccountId));
-  for (const c of cached) if (c.act) set.add(formatAct(c.act));
+  const [tpl, hist, cached] = await Promise.all([
+    db.selectDistinct({ act: schema.templates.adAccountId }).from(schema.templates).where(isNotNull(schema.templates.adAccountId)),
+    db.selectDistinct({ act: schema.insights.adAccountId }).from(schema.insights).where(isNotNull(schema.insights.adAccountId)),
+    // ads_cache covers accounts that have ads but no delivery yet (e.g. a fresh
+    // US account right after its first uploads).
+    db.selectDistinct({ act: schema.adsCache.adAccountId }).from(schema.adsCache).where(isNotNull(schema.adsCache.adAccountId)),
+  ]);
+  for (const r of [...tpl, ...hist, ...cached]) if (r.act) set.add(formatAct(r.act));
   return [...set];
 }
 
-export async function runSync() {
-  const account = await resolveAccount();
-  const accounts = await accountsToSync(account.adAccountId);
-  const results: Record<string, unknown> = {};
-  for (const act of accounts) {
-    try {
-      results[act] = await withAdAccount(act, () =>
-        syncOneAccount(act, act === account.adAccountId)
-      );
-    } catch (e) {
-      results[act] = { error: e instanceof Error ? e.message : String(e) };
-      console.error(`runSync failed for ${act}:`, e);
+/**
+ * Account-wide sync. `days` = how far back the rolling window reaches (the
+ * nightly run uses 30 so attribution revisions land; the manual button uses a
+ * short window so it returns in seconds).
+ */
+export async function runSync(opts: { days?: number; deadline?: number } = {}) {
+  const days = opts.days ?? DEFAULT_WINDOW_DAYS;
+  const deadline = opts.deadline ?? Date.now() + SYNC_BUDGET_MS;
+  const result = await withLock("insights-accounts", 300, async () => {
+    const account = await resolveAccount();
+    const accounts = await accountsToSync(account.adAccountId);
+    const results: Record<string, unknown> = {};
+    for (const act of accounts) {
+      if (Date.now() > deadline) { results[act] = { skipped: "time budget" }; continue; }
+      try {
+        results[act] = await withAdAccount(act, () => syncOneAccount(act, days, deadline));
+      } catch (e) {
+        results[act] = { error: e instanceof Error ? e.message : String(e) };
+        console.error(`runSync failed for ${act}:`, e);
+      }
     }
-  }
-  return results;
+    // Owner rows show the ad set's current name — refresh from the cache in one statement.
+    await db.execute(sql`
+      UPDATE adset_owners o SET adset_name = c.name, updated_at = now()
+      FROM adsets_cache c
+      WHERE c.id = o.adset_id AND c.name IS DISTINCT FROM o.adset_name`);
+    return results;
+  });
+  return result ?? { skipped: "another sync is running" };
 }
 
-async function syncOneAccount(adAccountId: string, isPrimary: boolean) {
-  const today = new Date().toISOString().split("T")[0];
-  const since = new Date(Date.now() - 30 * 86400000).toISOString().split("T")[0];
+async function syncOneAccount(adAccountId: string, days: number, deadline: number) {
+  const today = daysAgo(0);
+  const since = daysAgo(days);
 
   // 1. Campaign metadata
   const campaigns = await getCampaigns();
-  for (const c of campaigns) {
-    await db.insert(schema.campaignsCache).values({
+  for (const chunk of chunks(campaigns)) {
+    await db.insert(schema.campaignsCache).values(chunk.map((c) => ({
       id: c.id, adAccountId, name: c.name, status: c.status, objective: c.objective,
       dailyBudget: c.daily_budget ? parseFloat(c.daily_budget) / 100 : null,
-    }).onConflictDoUpdate({
+    }))).onConflictDoUpdate({
       target: schema.campaignsCache.id,
-      set: { name: c.name, status: c.status, adAccountId, syncedAt: new Date() },
+      set: { ...excludedSet({ name: "name", status: "status", adAccountId: "ad_account_id" }), syncedAt: sql`now()` },
     });
   }
 
-  // 1b. Ad set metadata → adsets_cache (names / status / created_time for the
-  // Learning Loop). Best-effort: a failure here must not stop the insights.
+  // 1b. Ad set metadata → adsets_cache. Best-effort: a failure here must not stop the insights.
   let adsetCount = 0;
   try {
     adsetCount = await syncAdsetsCache();
@@ -414,10 +370,13 @@ async function syncOneAccount(adAccountId: string, isPrimary: boolean) {
     console.error(`adsets_cache sync failed for ${adAccountId}:`, e instanceof Error ? e.message : e);
   }
 
-  // 2. Ad metadata → ads_cache (for ad names on the editor dashboard)
-  const ads = await getAds();
-  for (const ad of ads) {
-    await db.insert(schema.adsCache).values({
+  // 2. Ad metadata → ads_cache. Lean field list: preview_shareable_link is
+  // expensive for Meta to build and the sync never stored it.
+  const ads = await metaApiPaginated<Ad>(`/${adAccountId}/ads`, {
+    params: { fields: "id,adset_id,campaign_id,name,status,creative{id,video_id,image_hash}", limit: 500 },
+  });
+  for (const chunk of chunks(ads)) {
+    await db.insert(schema.adsCache).values(chunk.map((ad) => ({
       id: ad.id,
       adAccountId,
       adsetId: ad.adset_id,
@@ -427,53 +386,44 @@ async function syncOneAccount(adAccountId: string, isPrimary: boolean) {
       creativeId: ad.creative?.id || null,
       videoId: ad.creative?.video_id || null,
       imageHash: ad.creative?.image_hash || null,
-    }).onConflictDoUpdate({
+    }))).onConflictDoUpdate({
       target: schema.adsCache.id,
       set: {
-        name: ad.name, status: ad.status,
-        adAccountId,
-        creativeId: ad.creative?.id || null,
-        videoId: ad.creative?.video_id || null,
-        imageHash: ad.creative?.image_hash || null,
-        syncedAt: new Date(),
+        ...excludedSet({
+          name: "name", status: "status", adAccountId: "ad_account_id", adsetId: "adset_id", campaignId: "campaign_id",
+          creativeId: "creative_id", videoId: "video_id", imageHash: "image_hash",
+        }),
+        syncedAt: sql`now()`,
       },
     });
   }
 
   // 3. Campaign-level daily insights
-  const campaignInsights = await getInsights({
-    level: "campaign",
-    dateRange: { since, until: today },
-    timeIncrement: 1,
-  });
+  const campaignInsights = await getInsights({ level: "campaign", dateRange: { since, until: today }, timeIncrement: 1 });
   const campaignRows = campaignInsights.filter((r) => r.campaign_id).map((r) => toRow(r, r.campaign_id!, "campaign", adAccountId));
-  await replaceInsights("campaign", since, today, campaignRows, adAccountId, isPrimary);
+  await upsertInsights(campaignRows);
 
-  // 4. Ad-level daily insights (powers the editor dashboard) — with video metrics.
-  //
-  // Fetched in weekly chunks. A single 30-day request across every ad in a large
-  // account is big enough that Meta's pagination gives up partway ("an unknown
-  // error occurred"); combined with the delete-then-write below that silently
-  // shrank the table, because a whole window was cleared and only the fraction
-  // that arrived was written back. Small windows paginate cleanly, and each
-  // chunk replaces only its own days, so a failure late in the run cannot
-  // damage the days already rebuilt.
+  // 4. Ad-level daily insights (powers the editor dashboard), ARCHIVED and
+  // DELETED ads included — Meta drops them unless asked, and the editor's
+  // lifetime numbers need every ad that ever spent. Weekly chunks paginate
+  // cleanly on accounts with thousands of ads; each chunk is written as soon
+  // as it arrives. Newest first: if the budget runs out, the days left for
+  // tomorrow are the oldest ones, which barely move.
   let adRowCount = 0;
-  let cursor = since;
-  while (cursor <= today) {
-    const chunkEnd = addDays(cursor, AD_INSIGHT_CHUNK_DAYS - 1) < today
-      ? addDays(cursor, AD_INSIGHT_CHUNK_DAYS - 1)
-      : today;
+  let complete = true;
+  for (let chunkEnd = today; chunkEnd >= since; ) {
+    if (Date.now() > deadline) { complete = false; break; }
+    const chunkStart = addDays(chunkEnd, -(AD_INSIGHT_CHUNK_DAYS - 1)) > since ? addDays(chunkEnd, -(AD_INSIGHT_CHUNK_DAYS - 1)) : since;
     const chunk = await getInsights({
       level: "ad",
-      dateRange: { since: cursor, until: chunkEnd },
+      dateRange: { since: chunkStart, until: chunkEnd },
       timeIncrement: 1,
       includeVideoMetrics: true,
+      includeAllAdStatuses: true,
     });
-    const rows = chunk.filter((r) => r.ad_id).map((r) => toRow(r, r.ad_id!, "ad", adAccountId));
-    await replaceInsights("ad", cursor, chunkEnd, rows, adAccountId, isPrimary);
-    adRowCount += rows.length;
-    cursor = addDays(chunkEnd, 1);
+    await upsertAdStubs(chunk, adAccountId);
+    adRowCount += await upsertInsights(chunk.filter((r) => r.ad_id).map((r) => toRow(r, r.ad_id!, "ad", adAccountId)));
+    chunkEnd = addDays(chunkStart, -1);
   }
 
   return {
@@ -482,5 +432,6 @@ async function syncOneAccount(adAccountId: string, isPrimary: boolean) {
     ads: ads.length,
     campaignInsightRows: campaignRows.length,
     adInsightRows: adRowCount,
+    complete,
   };
 }

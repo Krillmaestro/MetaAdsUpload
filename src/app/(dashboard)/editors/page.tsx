@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { format, subDays } from "date-fns";
 import {
   ResponsiveContainer,
@@ -471,14 +471,20 @@ export default function EditorsPage() {
   const [creatingMember, setCreatingMember] = useState(false);
   const [createError, setCreateError] = useState("");
 
+  // Only the latest request may write state: a quick range change must not let
+  // a slower, older response overwrite the newer one.
+  const editorsAbort = useRef<AbortController | null>(null);
   const fetchEditors = useCallback(async () => {
+    editorsAbort.current?.abort();
+    const ctrl = new AbortController();
+    editorsAbort.current = ctrl;
     setLoading(true);
     try {
       const params = new URLSearchParams({
         from: format(dateRange.from, "yyyy-MM-dd"),
         to: format(dateRange.to, "yyyy-MM-dd"),
       });
-      const res = await fetch(`/api/editors?${params}`);
+      const res = await fetch(`/api/editors?${params}`, { signal: ctrl.signal });
       if (!res.ok) throw new Error("Failed to fetch");
       const data = await res.json();
       setEditors(data.editors || []);
@@ -490,9 +496,9 @@ export default function EditorsPage() {
       setBonusTiers(data.bonusTiers || []);
       setSeriesByEditor({});
     } catch (err) {
-      console.error(err);
+      if ((err as Error)?.name !== "AbortError") console.error(err);
     } finally {
-      setLoading(false);
+      if (editorsAbort.current === ctrl) setLoading(false);
     }
   }, [dateRange]);
 
@@ -527,12 +533,18 @@ export default function EditorsPage() {
       const res = await fetch("/api/editors/sync", { method: "POST" });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Sync failed");
-      const pending = data.synced?.backfillsPending ?? 0;
-      toast.success(
-        `Synced from Meta: ${data.synced?.adInsightRows ?? 0} ad rows, ${data.synced?.ads ?? 0} ads` +
-        (data.synced?.backfilled ? `, ${data.synced.backfilled} lifetime backfills` : "") +
-        (pending > 0 ? ` — ${pending} ad sets still need backfill, run sync again` : "")
-      );
+      if (data.synced?.skipped) {
+        toast.info("A sync is already running — numbers update when it finishes");
+      } else {
+        const rows = Object.values((data.accounts || {}) as Record<string, { adInsightRows?: number }>)
+          .reduce((s, a) => s + (a?.adInsightRows || 0), 0);
+        const pending = data.synced?.backfillsPending ?? 0;
+        toast.success(
+          `Synced from Meta: ${rows} ad-day rows (last 3 days)` +
+          (data.synced?.backfilled ? `, ${data.synced.backfilled} lifetime backfills` : "") +
+          (pending > 0 ? ` — ${pending} ad sets still need backfill, run sync again` : "")
+        );
+      }
       fetchEditors();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Sync failed");
@@ -615,8 +627,9 @@ export default function EditorsPage() {
           notes: payoutNotes || null,
         }),
       });
-      if (!res.ok) throw new Error("Failed to create payout");
-      toast.success(`Payout of $${fmt(payoutEditor.unpaidAmount)} created for ${payoutEditor.editor}`);
+      const created = await res.json();
+      if (!res.ok) throw new Error(created?.error || "Failed to create payout");
+      toast.success(`Payout of $${fmt(created.amount)} created for ${payoutEditor.editor}`);
       setShowPayoutModal(false);
       fetchEditors();
     } catch {

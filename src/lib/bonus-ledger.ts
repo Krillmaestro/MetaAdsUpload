@@ -6,199 +6,8 @@
 import { db, schema } from "@/db";
 import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { BONUS_TIERS, type BonusTier } from "./bonus";
-
-export interface OwnedAd {
-  adId: string;
-  videoEditorId: string | null;
-  creativeStrategistId: string | null;
-  source: string; // "analyzer" | "uploader" | "assignment"
-  assignmentId: string | null;
-  adName: string | null;
-  campaignId: string | null;
-  adsetId: string | null;
-  angle: string | null;
-  problem: string | null;
-  templateId: number | null;
-  templateName: string | null;
-  graveyardOutcome: string | null; // "spend_winner" | "loser" | null
-}
-
-/**
- * Resolve ad → owner across both attribution sources.
- * Priority: ad_owners (explicit, set via button/uploader) overrides the
- * assignment-workflow linkage (assignments.metaAdId → assignedToId).
- */
-export async function resolveOwnedAds(): Promise<OwnedAd[]> {
-  const [owners, assignmentRows, ads] = await Promise.all([
-    db.select().from(schema.adOwners),
-    db.select().from(schema.assignments).where(isNotNull(schema.assignments.metaAdId)),
-    db
-      .select({
-        id: schema.adsCache.id,
-        name: schema.adsCache.name,
-        campaignId: schema.adsCache.campaignId,
-        adsetId: schema.adsCache.adsetId,
-      })
-      .from(schema.adsCache),
-  ]);
-
-  const adMeta = new Map(ads.map((a) => [a.id, a]));
-  const map = new Map<string, OwnedAd>();
-
-  // Secondary source first so explicit owners (below) override it.
-  for (const a of assignmentRows) {
-    if (!a.metaAdId) continue;
-    map.set(a.metaAdId, {
-      adId: a.metaAdId,
-      videoEditorId: a.assignedToId,
-      creativeStrategistId: a.creativeStrategistId || null,
-      source: "assignment",
-      assignmentId: a.id,
-      adName: adMeta.get(a.metaAdId)?.name || a.autoName || null,
-      campaignId: a.metaCampaignId || adMeta.get(a.metaAdId)?.campaignId || null,
-      adsetId: a.metaAdsetId || adMeta.get(a.metaAdId)?.adsetId || null,
-      angle: null,
-      problem: null,
-      templateId: null,
-      templateName: null,
-      graveyardOutcome: null,
-    });
-  }
-
-  for (const o of owners) {
-    const existing = map.get(o.adId);
-    map.set(o.adId, {
-      adId: o.adId,
-      // An explicit owner overrides the assignment owner; a metadata-only
-      // ad_owners row (e.g. one created just to store a graveyard outcome) keeps
-      // the assignment-derived owner instead of nulling it.
-      videoEditorId: o.videoEditorId ?? existing?.videoEditorId ?? null,
-      creativeStrategistId: o.creativeStrategistId ?? existing?.creativeStrategistId ?? null,
-      source: o.videoEditorId || o.creativeStrategistId ? o.source || "analyzer" : existing?.source || o.source || "analyzer",
-      assignmentId: existing?.assignmentId || null,
-      adName: o.adName || adMeta.get(o.adId)?.name || existing?.adName || null,
-      campaignId: o.campaignId || adMeta.get(o.adId)?.campaignId || existing?.campaignId || null,
-      adsetId: o.adsetId || adMeta.get(o.adId)?.adsetId || existing?.adsetId || null,
-      angle: o.angle ?? existing?.angle ?? null,
-      problem: o.problem ?? existing?.problem ?? null,
-      templateId: o.templateId ?? existing?.templateId ?? null,
-      templateName: o.templateName ?? existing?.templateName ?? null,
-      graveyardOutcome: o.graveyardOutcome ?? existing?.graveyardOutcome ?? null,
-    });
-  }
-
-  return Array.from(map.values());
-}
-
-/**
- * Lock in lifetime-earned bonuses for the given owned ads.
- * Evaluates each ad on its CUMULATIVE (all-time) spend + ROAS and bumps the
- * locked earnedBonus up to the highest tier ever reached — never down.
- * Returns the up-to-date ledger rows for the evaluated ads.
- */
-export async function recomputeAdBonuses(ownedAds: OwnedAd[], sekPerUsd = 10.5, tiers: BonusTier[] = BONUS_TIERS) {
-  const rate = sekPerUsd > 0 ? sekPerUsd : 10.5;
-  const eligible = ownedAds.filter((a) => a.videoEditorId);
-  const adIds = eligible.map((a) => a.adId);
-  if (adIds.length === 0) return [] as (typeof schema.adBonuses.$inferSelect)[];
-
-  const editorByAd = new Map(eligible.map((a) => [a.adId, a.videoEditorId as string]));
-
-  // Daily insights per ad, in chronological order, so we can capture EVERY tier
-  // the ad passes through during its run — not just the latest cumulative state.
-  const daily = await db
-    .select({
-      adId: schema.insights.entityId,
-      date: schema.insights.dateStart,
-      spend: schema.insights.spend,
-      purchaseValue: schema.insights.purchaseValue,
-    })
-    .from(schema.insights)
-    .where(and(eq(schema.insights.entityType, "ad"), inArray(schema.insights.entityId, adIds)))
-    .orderBy(schema.insights.entityId, schema.insights.dateStart);
-
-  const dailyByAd = new Map<string, Array<{ date: string; spend: number; purchaseValue: number }>>();
-  for (const r of daily) {
-    const list = dailyByAd.get(r.adId) || [];
-    list.push({ date: String(r.date), spend: Number(r.spend) || 0, purchaseValue: Number(r.purchaseValue) || 0 });
-    dailyByAd.set(r.adId, list);
-  }
-
-  const existing = await db
-    .select()
-    .from(schema.adBonuses)
-    .where(inArray(schema.adBonuses.adId, adIds));
-  const existingByAd = new Map(existing.map((r) => [r.adId, r]));
-
-  const now = new Date();
-
-  for (const adId of adIds) {
-    const editorId = editorByAd.get(adId);
-    if (!editorId) continue;
-    const rows = dailyByAd.get(adId) || [];
-    const prev = existingByAd.get(adId);
-
-    // Walk day-by-day, accumulating spend + revenue. At each step evaluate the
-    // tier and record the first date each tier is reached. tierLog only grows.
-    const tierLog: Record<string, string> = { ...(prev?.tierLog || {}) };
-    let cumSpendSek = 0;
-    let cumRevSek = 0;
-    let maxBonus = 0;
-    let maxTier = 0;
-    for (const day of rows) {
-      cumSpendSek += day.spend;
-      cumRevSek += day.purchaseValue;
-      const roas = cumSpendSek > 0 ? cumRevSek / cumSpendSek : 0;
-      const usdSpend = cumSpendSek / rate;
-      // Record EVERY tier whose criteria are met at this point — not just the
-      // highest — so the tier ladder reflects all levels genuinely reached.
-      // (Tiers don't strictly stack: $10/$20 need higher ROAS than $30/$50.)
-      for (const t of tiers) {
-        if (usdSpend >= t.minSpend && roas >= t.minRoas) {
-          if (!tierLog[String(t.bonus)]) tierLog[String(t.bonus)] = day.date;
-          if (t.bonus > maxBonus) { maxBonus = t.bonus; maxTier = t.bonus; }
-        }
-      }
-    }
-
-    const finalSpendUsd = cumSpendSek / rate;
-    const finalRoas = cumSpendSek > 0 ? cumRevSek / cumSpendSek : 0;
-    const earnedBonus = Math.max(prev?.earnedBonus || 0, maxBonus);
-    const earnedTier = Math.max(prev?.earnedTier || 0, maxTier);
-
-    if (!prev) {
-      if (earnedBonus <= 0 && finalSpendUsd <= 0) continue;
-      await db.insert(schema.adBonuses).values({
-        adId,
-        editorId,
-        earnedBonus,
-        earnedTier,
-        tierLog,
-        peakSpend: finalSpendUsd,
-        peakRoas: finalRoas,
-        firstQualifiedAt: earnedBonus > 0 ? now : null,
-        lastEvaluatedAt: now,
-      });
-    } else {
-      await db
-        .update(schema.adBonuses)
-        .set({
-          editorId, // keep owner in sync if it changed
-          earnedBonus,
-          earnedTier,
-          tierLog,
-          peakSpend: Math.max(prev.peakSpend, finalSpendUsd),
-          peakRoas: finalRoas,
-          firstQualifiedAt: prev.firstQualifiedAt || (earnedBonus > 0 ? now : null),
-          lastEvaluatedAt: now,
-          updatedAt: now,
-        })
-        .where(eq(schema.adBonuses.adId, adId));
-    }
-  }
-
-  return db.select().from(schema.adBonuses).where(inArray(schema.adBonuses.adId, adIds));
-}
+import { getEvolveSettings } from "./evolve/settings";
+import { getUsdAccountIds, usdFactor } from "./money";
 
 // ─── Ad-set level (the bonus unit) ──────────────────────────────────────────
 
@@ -213,13 +22,25 @@ export interface OwnedAdset {
   verdict: string | null;
   graveyardOutcome: string | null;
   source: string;
+  /** Lifetime history is in the DB (adset_owners.backfilled_at set). */
+  backfilled: boolean;
 }
 
 /** Resolve ad set → owner. adset_owners overrides the assignment linkage. */
 export async function resolveOwnedAdsets(): Promise<OwnedAdset[]> {
   const [owners, assignmentRows] = await Promise.all([
     db.select().from(schema.adsetOwners),
-    db.select().from(schema.assignments).where(isNotNull(schema.assignments.metaAdsetId)),
+    db
+      .select({
+        metaAdsetId: schema.assignments.metaAdsetId,
+        assignedToId: schema.assignments.assignedToId,
+        creativeStrategistId: schema.assignments.creativeStrategistId,
+        autoName: schema.assignments.autoName,
+        metaCampaignId: schema.assignments.metaCampaignId,
+      })
+      .from(schema.assignments)
+      .where(isNotNull(schema.assignments.metaAdsetId))
+      .orderBy(schema.assignments.updatedAt),
   ]);
   const map = new Map<string, OwnedAdset>();
   for (const a of assignmentRows) {
@@ -235,6 +56,7 @@ export async function resolveOwnedAdsets(): Promise<OwnedAdset[]> {
       verdict: null,
       graveyardOutcome: null,
       source: "assignment",
+      backfilled: false,
     });
   }
   for (const o of owners) {
@@ -250,37 +72,56 @@ export async function resolveOwnedAdsets(): Promise<OwnedAdset[]> {
       verdict: o.verdict ?? ex?.verdict ?? null,
       graveyardOutcome: o.graveyardOutcome ?? ex?.graveyardOutcome ?? null,
       source: o.videoEditorId || o.creativeStrategistId ? (o.source || "analyzer") : (ex?.source || o.source || "analyzer"),
+      backfilled: !!o.backfilledAt,
     });
   }
   return Array.from(map.values());
 }
 
+type LedgerRow = typeof schema.adBonuses.$inferSelect;
+
 /**
  * Lock in lifetime bonuses per AD SET. The ad set's performance is the aggregate
- * of all its ads (sum spend + revenue → blended ROAS), in USD. Walks the daily
- * aggregate chronologically and records every tier reached (tier ladder).
- * Stored in ad_bonuses keyed by the ad set id.
+ * of all its ads (sum spend + revenue → blended ROAS), in USD — each insight
+ * row converted by its own account's currency. Walks the daily aggregate
+ * chronologically and records every tier reached (tier ladder). Stored in
+ * ad_bonuses keyed by the ad set id.
+ *
+ * Runs after each sync (and after an owner change), never on a page view.
+ * Writes are one bulk upsert of the rows that actually changed.
+ *
+ * An ad set whose lifetime history has not been backfilled yet only gets its
+ * spend refreshed: a tier is never locked on a partial history (a 30-day
+ * slice can show a ROAS the whole run never had, and locks never go down).
  */
-export async function recomputeAdsetBonuses(ownedAdsets: OwnedAdset[], sekPerUsd = 10.5, tiers: BonusTier[] = BONUS_TIERS) {
-  const rate = sekPerUsd > 0 ? sekPerUsd : 10.5;
-  const eligible = ownedAdsets.filter((a) => a.videoEditorId);
+export async function recomputeAdsetBonuses(
+  ownedAdsets: OwnedAdset[],
+  sekPerUsd = 10.5,
+  tiers: BonusTier[] = BONUS_TIERS,
+  usdAccountIds?: string[],
+): Promise<{ evaluated: number; written: number }> {
+  const eligible = ownedAdsets.filter((a) => a.videoEditorId && a.source !== "demo");
   const adsetIds = eligible.map((a) => a.adsetId);
-  if (adsetIds.length === 0) return [] as (typeof schema.adBonuses.$inferSelect)[];
-  const editorByAdset = new Map(eligible.map((a) => [a.adsetId, a.videoEditorId as string]));
+  if (adsetIds.length === 0) return { evaluated: 0, written: 0 };
+  const byId = new Map(eligible.map((a) => [a.adsetId, a]));
+  const factor = usdFactor(usdAccountIds ?? (await getUsdAccountIds()), sekPerUsd);
 
-  // Daily aggregate per ad set = sum of its ads' daily insights (join via ads_cache).
-  const daily = await db
-    .select({
-      adsetId: schema.adsCache.adsetId,
-      date: schema.insights.dateStart,
-      spend: sql<number>`coalesce(sum(${schema.insights.spend}),0)`,
-      purchaseValue: sql<number>`coalesce(sum(${schema.insights.purchaseValue}),0)`,
-    })
-    .from(schema.insights)
-    .innerJoin(schema.adsCache, eq(schema.insights.entityId, schema.adsCache.id))
-    .where(and(eq(schema.insights.entityType, "ad"), inArray(schema.adsCache.adsetId, adsetIds)))
-    .groupBy(schema.adsCache.adsetId, schema.insights.dateStart)
-    .orderBy(schema.adsCache.adsetId, schema.insights.dateStart);
+  // Daily aggregate per ad set in USD = sum of its ads' daily insights (join via ads_cache).
+  const [daily, existing] = await Promise.all([
+    db
+      .select({
+        adsetId: schema.adsCache.adsetId,
+        date: schema.insights.dateStart,
+        spend: sql<number>`coalesce(sum(${schema.insights.spend} * ${factor}),0)`,
+        purchaseValue: sql<number>`coalesce(sum(${schema.insights.purchaseValue} * ${factor}),0)`,
+      })
+      .from(schema.insights)
+      .innerJoin(schema.adsCache, eq(schema.insights.entityId, schema.adsCache.id))
+      .where(and(eq(schema.insights.entityType, "ad"), inArray(schema.adsCache.adsetId, adsetIds)))
+      .groupBy(schema.adsCache.adsetId, schema.insights.dateStart)
+      .orderBy(schema.adsCache.adsetId, schema.insights.dateStart),
+    db.select().from(schema.adBonuses).where(inArray(schema.adBonuses.adId, adsetIds)),
+  ]);
 
   const byAdset = new Map<string, Array<{ date: string; spend: number; pv: number }>>();
   for (const r of daily) {
@@ -288,63 +129,118 @@ export async function recomputeAdsetBonuses(ownedAdsets: OwnedAdset[], sekPerUsd
     list.push({ date: String(r.date), spend: Number(r.spend) || 0, pv: Number(r.purchaseValue) || 0 });
     byAdset.set(r.adsetId, list);
   }
-
-  const existing = await db.select().from(schema.adBonuses).where(inArray(schema.adBonuses.adId, adsetIds));
   const existingByAdset = new Map(existing.map((r) => [r.adId, r]));
   const now = new Date();
+  const round = (n: number) => Math.round(n * 100) / 100;
 
+  const writes: Array<typeof schema.adBonuses.$inferInsert> = [];
   for (const adsetId of adsetIds) {
-    const editorId = editorByAdset.get(adsetId);
-    if (!editorId) continue;
-    const rows = byAdset.get(adsetId) || [];
+    const owned = byId.get(adsetId)!;
+    const editorId = owned.videoEditorId as string;
     const prev = existingByAdset.get(adsetId);
     const tierLog: Record<string, string> = { ...((prev?.tierLog as Record<string, string>) || {}) };
-    let cumSpendSek = 0, cumRevSek = 0, maxBonus = 0, maxTier = 0;
-    for (const day of rows) {
-      cumSpendSek += day.spend;
-      cumRevSek += day.pv;
-      const roas = cumSpendSek > 0 ? cumRevSek / cumSpendSek : 0;
-      const usd = cumSpendSek / rate;
+    let cumSpend = 0, cumRev = 0, maxBonus = 0;
+    for (const day of byAdset.get(adsetId) || []) {
+      cumSpend += day.spend;
+      cumRev += day.pv;
+      if (!owned.backfilled) continue;
+      const roas = cumSpend > 0 ? cumRev / cumSpend : 0;
       for (const t of tiers) {
-        if (usd >= t.minSpend && roas >= t.minRoas) {
+        if (cumSpend >= t.minSpend && roas >= t.minRoas) {
           if (!tierLog[String(t.bonus)]) tierLog[String(t.bonus)] = day.date;
-          if (t.bonus > maxBonus) { maxBonus = t.bonus; maxTier = t.bonus; }
+          if (t.bonus > maxBonus) maxBonus = t.bonus;
         }
       }
     }
-    const finalSpendUsd = cumSpendSek / rate;
-    const finalRoas = cumSpendSek > 0 ? cumRevSek / cumSpendSek : 0;
+    const spend = round(cumSpend);
+    const roas = cumSpend > 0 ? round(cumRev / cumSpend) : 0;
     const earnedBonus = Math.max(prev?.earnedBonus || 0, maxBonus);
-    const earnedTier = Math.max(prev?.earnedTier || 0, maxTier);
-    if (!prev) {
-      if (earnedBonus <= 0 && finalSpendUsd <= 0) continue;
-      await db.insert(schema.adBonuses).values({
-        adId: adsetId, editorId, earnedBonus, earnedTier, tierLog,
-        peakSpend: finalSpendUsd, peakRoas: finalRoas,
-        firstQualifiedAt: earnedBonus > 0 ? now : null, lastEvaluatedAt: now,
-      });
-    } else {
-      await db.update(schema.adBonuses).set({
-        editorId, earnedBonus, earnedTier, tierLog,
-        peakSpend: Math.max(prev.peakSpend, finalSpendUsd), peakRoas: finalRoas,
-        firstQualifiedAt: prev.firstQualifiedAt || (earnedBonus > 0 ? now : null),
-        lastEvaluatedAt: now, updatedAt: now,
-      }).where(eq(schema.adBonuses.adId, adsetId));
-    }
+    const earnedTier = Math.max(prev?.earnedTier || 0, maxBonus);
+
+    if (!prev && earnedBonus <= 0 && spend <= 0) continue;
+    const unchanged =
+      prev &&
+      prev.editorId === editorId &&
+      prev.earnedBonus === earnedBonus &&
+      prev.earnedTier === earnedTier &&
+      round(prev.peakSpend) === spend &&
+      round(prev.peakRoas) === roas &&
+      JSON.stringify(prev.tierLog || {}) === JSON.stringify(tierLog);
+    if (unchanged) continue;
+
+    writes.push({
+      adId: adsetId,
+      editorId,
+      earnedBonus,
+      earnedTier,
+      tierLog,
+      paidAmount: prev?.paidAmount ?? 0,
+      // Current lifetime spend/ROAS (not a running max — a correction or
+      // removed duplicate must be able to bring it down).
+      peakSpend: spend,
+      peakRoas: roas,
+      firstQualifiedAt: prev?.firstQualifiedAt || (earnedBonus > 0 ? now : null),
+      lastEvaluatedAt: now,
+      updatedAt: now,
+    });
   }
+
+  for (let i = 0; i < writes.length; i += 500) {
+    await db
+      .insert(schema.adBonuses)
+      .values(writes.slice(i, i + 500))
+      .onConflictDoUpdate({
+        target: schema.adBonuses.adId,
+        set: {
+          editorId: sql.raw("excluded.editor_id"),
+          // Locks only go up, even if two refreshes race.
+          earnedBonus: sql`greatest(${schema.adBonuses.earnedBonus}, excluded.earned_bonus)`,
+          earnedTier: sql`greatest(${schema.adBonuses.earnedTier}, excluded.earned_tier)`,
+          tierLog: sql.raw("excluded.tier_log"),
+          peakSpend: sql.raw("excluded.peak_spend"),
+          peakRoas: sql.raw("excluded.peak_roas"),
+          firstQualifiedAt: sql`coalesce(${schema.adBonuses.firstQualifiedAt}, excluded.first_qualified_at)`,
+          lastEvaluatedAt: sql.raw("excluded.last_evaluated_at"),
+          updatedAt: sql.raw("excluded.updated_at"),
+          // paid_amount is deliberately NOT touched here — only payouts move it.
+        },
+      });
+  }
+  return { evaluated: adsetIds.length, written: writes.length };
+}
+
+/**
+ * Re-evaluate the ledger with the current settings. `adsetIds` limits it to
+ * specific ad sets (after an owner change); omitted = every owned ad set.
+ */
+export async function refreshBonusLedger(adsetIds?: string[]) {
+  const settings = await getEvolveSettings();
+  const rate = settings.sekPerUsd > 0 ? settings.sekPerUsd : 10.5;
+  let owned = await resolveOwnedAdsets();
+  if (adsetIds) {
+    const want = new Set(adsetIds);
+    owned = owned.filter((o) => want.has(o.adsetId));
+  }
+  return recomputeAdsetBonuses(owned, rate, settings.bonusTiers);
+}
+
+/** Ledger rows for the given ad sets (read-only — what the pages use). */
+export async function readLedger(adsetIds: string[]): Promise<LedgerRow[]> {
+  if (adsetIds.length === 0) return [];
   return db.select().from(schema.adBonuses).where(inArray(schema.adBonuses.adId, adsetIds));
 }
 
-/** Record a payment against a set of ad bonuses (called when a payout is marked paid). */
+/**
+ * Record a payment against a set of ad bonuses (called when a payout is marked
+ * paid; negative amounts reverse it). One statement for the whole breakdown.
+ */
 export async function applyBonusPayment(breakdown: Array<{ adId: string; bonus: number }>) {
-  for (const item of breakdown) {
-    if (!item.adId) continue;
-    await db
-      .update(schema.adBonuses)
-      .set({
-        paidAmount: sql`${schema.adBonuses.paidAmount} + ${item.bonus}`,
-        updatedAt: new Date(),
-      })
-      .where(eq(schema.adBonuses.adId, item.adId));
-  }
+  const items = breakdown.filter((b) => b.adId && Number.isFinite(b.bonus) && b.bonus !== 0);
+  if (items.length === 0) return;
+  const values = sql.join(items.map((b) => sql`(${b.adId}::text, ${b.bonus}::float8)`), sql`, `);
+  await db.execute(sql`
+    UPDATE ad_bonuses AS b
+    SET paid_amount = greatest(b.paid_amount + v.amount, 0), updated_at = now()
+    FROM (VALUES ${values}) AS v(ad_id, amount)
+    WHERE b.ad_id = v.ad_id`);
 }

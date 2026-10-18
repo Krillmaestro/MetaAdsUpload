@@ -6,6 +6,7 @@ export interface InsightData {
   campaign_id?: string;
   adset_id?: string;
   ad_id?: string;
+  ad_name?: string;
   spend?: string;
   impressions?: string;
   reach?: string;
@@ -21,17 +22,20 @@ export interface InsightData {
   video_thruplay_watched_actions?: Array<{ action_type: string; value: string }>;
 }
 
-// Core fields only — ctr/cpc/cpm are derivable from spend/clicks/impressions
+// ctr/cpc/cpm are stored per row and read by the dashboards, so they must be
+// requested — without them every stored row had 0 in those columns.
 const INSIGHT_FIELDS = [
   "campaign_id", "adset_id", "ad_id",
-  "spend", "impressions", "reach", "clicks",
+  "spend", "impressions", "reach", "clicks", "ctr", "cpc", "cpm",
   "actions", "action_values",
 ].join(",");
 
-// Extended fields for dashboard views that need video metrics
+// Extended fields for the ad-level syncs: video metrics, plus ad_name so an
+// ad that only shows up in insights (archived/deleted) still gets an
+// ads_cache row and joins to its ad set.
 const INSIGHT_FIELDS_WITH_VIDEO = [
-  "campaign_id", "adset_id", "ad_id",
-  "spend", "impressions", "reach", "clicks",
+  "campaign_id", "adset_id", "ad_id", "ad_name",
+  "spend", "impressions", "reach", "clicks", "ctr", "cpc", "cpm",
   "actions", "action_values",
   "video_30_sec_watched_actions", "video_avg_time_watched_actions",
   "video_thruplay_watched_actions",
@@ -47,8 +51,10 @@ export async function getInsights(params: {
   includeVideoMetrics?: boolean;
   /** When set (e.g. 1), Meta returns one row per day instead of one aggregated row. */
   timeIncrement?: number;
+  /** level=ad only: also return archived/deleted ads (Meta drops them by default). */
+  includeAllAdStatuses?: boolean;
 }) {
-  const { entityId, level = "campaign", dateRange, breakdowns, actionBreakdowns, limit = 500, includeVideoMetrics = false, timeIncrement } = params;
+  const { entityId, level = "campaign", dateRange, breakdowns, actionBreakdowns, limit = 500, includeVideoMetrics = false, timeIncrement, includeAllAdStatuses = false } = params;
   const adAccountId = entityId || await getAdAccountId();
   const endpoint = `/${adAccountId}/insights`;
 
@@ -75,6 +81,10 @@ export async function getInsights(params: {
 
   if (actionBreakdowns?.length) {
     queryParams.action_breakdowns = actionBreakdowns.join(",");
+  }
+
+  if (includeAllAdStatuses && level === "ad") {
+    queryParams.filtering = JSON.stringify([{ field: "ad.effective_status", operator: "IN", value: ALL_AD_STATUSES }]);
   }
 
   return metaApiPaginated<InsightData>(endpoint, {
@@ -110,6 +120,7 @@ export async function getAdInsightsById(
 export const ALL_AD_STATUSES = [
   "ACTIVE", "PAUSED", "ARCHIVED", "DELETED", "CAMPAIGN_PAUSED", "ADSET_PAUSED",
   "DISAPPROVED", "WITH_ISSUES", "IN_PROCESS", "PENDING_REVIEW",
+  "PENDING_BILLING_INFO", "PREAPPROVED",
 ];
 
 /** Per-ad daily insights for ONE ad set (/{adsetId}/insights?level=ad). One call → all ads in the set, archived and deleted included. */

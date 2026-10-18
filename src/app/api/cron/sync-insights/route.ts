@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { runEditorInsightsSync, runSync } from "@/lib/meta/sync-insights";
+import { runEditorInsightsSync, runSync, SYNC_BUDGET_MS } from "@/lib/meta/sync-insights";
+import { refreshBonusLedger } from "@/lib/bonus-ledger";
+import { invalidateEditorStats } from "@/lib/editor-stats";
 import { autoAssignAllAccounts } from "@/lib/adsets/auto-assign";
 import { autoLinkAll } from "@/lib/learning-loop/link";
 
@@ -50,34 +52,38 @@ async function handle(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   try {
-    // The two syncs each need most of the 300s budget — they run as SEPARATE
-    // cron invocations (?mode=accounts at 05:40, ?mode=editor at 06:00 in
-    // vercel.json). Default = editor (original behaviour); mode=all is for
-    // manual runs where the caller accepts the timeout risk.
+    // Two cron invocations, each with its own 300s function:
+    //  ?mode=accounts (05:40) — auto-assign + auto-link, then every account's
+    //    rolling 30-day window (archived/deleted ads included) and a ledger refresh.
+    //  ?mode=editor (06:00, default) — lifetime backfills for owned ad sets
+    //    that don't have them yet, then a ledger refresh.
+    // mode=all runs both for manual triggers that accept the timeout risk.
+    const deadline = Date.now() + SYNC_BUDGET_MS;
     const mode = request.nextUrl.searchParams.get("mode") ?? "editor";
     if (mode === "accounts") {
-      // Auto-assign runs FIRST: runSync regularly eats the whole 300s budget
-      // and the function is killed mid-run, so anything after it never
-      // executes. That starved auto-assign every night — new ad sets sat
-      // without owners and the editor pages stopped picking up new videos.
+      // Auto-assign first, so new ad sets have owners before their numbers land.
       const autoAssign = await autoAssignSafely();
       const autoLink = await autoLinkSafely();
-      const accountSync = await runSync();
-      return NextResponse.json({ success: true, accountSync, autoAssign, autoLink });
+      const accountSync = await runSync({ deadline });
+      const ledger = await refreshBonusLedger();
+      invalidateEditorStats();
+      return NextResponse.json({ success: true, accountSync, autoAssign, autoLink, ledger });
     }
     if (mode === "all") {
       const autoAssign = await autoAssignSafely();
       await autoLinkSafely();
       let accountSync: unknown = null;
       try {
-        accountSync = await runSync();
+        accountSync = await runSync({ deadline });
       } catch (e) {
         accountSync = { error: e instanceof Error ? e.message : String(e) };
       }
-      const synced = await runEditorInsightsSync();
+      const synced = await runEditorInsightsSync({ deadline });
+      invalidateEditorStats();
       return NextResponse.json({ success: true, accountSync, autoAssign, synced });
     }
-    const synced = await runEditorInsightsSync();
+    const synced = await runEditorInsightsSync({ deadline });
+    invalidateEditorStats();
     return NextResponse.json({ success: true, synced });
   } catch (error) {
     console.error("Sync error:", error);

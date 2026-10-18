@@ -3,6 +3,8 @@ import { z } from "zod";
 import { auth } from "@/auth";
 import { applyProposals, buildProposals } from "@/lib/adsets/auto-assign";
 import { isElevated } from "@/lib/access";
+import { refreshBonusLedger } from "@/lib/bonus-ledger";
+import { invalidateEditorStats } from "@/lib/editor-stats";
 
 export const dynamic = "force-dynamic";
 
@@ -76,6 +78,8 @@ export async function POST(request: NextRequest) {
       includeConflicts,
       actorId: session.user.id,
     });
+    await refreshBonusLedger();
+    invalidateEditorStats();
     return NextResponse.json({ applied });
   } catch (e) {
     console.error("auto-assign apply failed:", e);

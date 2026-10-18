@@ -160,6 +160,7 @@ export const assignments = pgTable("assignments", {
 }, (table) => [
   index("assignments_assigned_to_id_idx").on(table.assignedToId),
   index("assignments_status_idx").on(table.status),
+  index("assignments_meta_adset_id_idx").on(table.metaAdsetId),
 ]);
 
 // ─── Time Entries ────────────────────────────────────────────────────────────
@@ -414,7 +415,18 @@ export const insights = pgTable("insights", {
   syncedAt: timestamp("synced_at").defaultNow().notNull(),
 }, (table) => [
   index("insights_entity_date_idx").on(table.entityId, table.entityType, table.dateStart),
+  // One row per entity and day (migration 0036) — syncs upsert on this.
+  uniqueIndex("insights_entity_day_uq").on(table.entityType, table.entityId, table.dateStart).where(sql`breakdown_key IS NULL`),
+  index("insights_acct_type_date_idx").on(table.adAccountId, table.entityType, table.dateStart),
 ]);
+
+// One sync at a time: the cron and the manual "Sync Meta" button take a lease
+// here so two runs can never write the same window concurrently.
+export const syncLocks = pgTable("sync_locks", {
+  name: text("name").primaryKey(),
+  lockedUntil: timestamp("locked_until").notNull(),
+  holder: text("holder"),
+});
 
 export const automationRules = pgTable("automation_rules", {
   id: serial("id").primaryKey(),
@@ -644,7 +656,6 @@ export const adBonuses = pgTable("ad_bonuses", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => [
   index("ad_bonuses_editor_idx").on(table.editorId),
-  index("ad_bonuses_status_idx").on(table.adId),
 ]);
 
 export const metaConnections = pgTable("meta_connections", {

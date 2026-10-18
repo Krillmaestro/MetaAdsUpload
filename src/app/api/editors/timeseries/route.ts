@@ -1,10 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
-import { db, schema } from "@/db";
-import { inArray } from "drizzle-orm";
-import { resolveOwnedAdsets } from "@/lib/bonus-ledger";
 import { getEditorTimeseries } from "@/lib/editor-stats";
-import { getEvolveSettings } from "@/lib/evolve/settings";
+import { parseDateRange } from "@/lib/date-range";
 
 // GET /api/editors/timeseries?editorId=...&from=...&to=...
 export async function GET(request: NextRequest) {
@@ -12,22 +9,11 @@ export async function GET(request: NextRequest) {
     const session = await auth();
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const { searchParams } = request.nextUrl;
-    const editorId = searchParams.get("editorId");
-    const from = searchParams.get("from") || new Date(Date.now() - 30 * 86400000).toISOString().split("T")[0];
-    const to = searchParams.get("to") || new Date().toISOString().split("T")[0];
+    const editorId = request.nextUrl.searchParams.get("editorId");
     if (!editorId) return NextResponse.json({ error: "editorId is required" }, { status: 400 });
+    const { from, to } = parseDateRange(request.nextUrl.searchParams);
 
-    // Editor's owned ad sets → their ads → timeseries over those ads.
-    const owned = await resolveOwnedAdsets();
-    const adsetIds = owned.filter((a) => a.videoEditorId === editorId).map((a) => a.adsetId);
-    const ads = adsetIds.length
-      ? await db.select({ id: schema.adsCache.id }).from(schema.adsCache).where(inArray(schema.adsCache.adsetId, adsetIds))
-      : [];
-    const adIds = ads.map((a) => a.id);
-    const settings = await getEvolveSettings();
-    const timeseries = await getEditorTimeseries(adIds, from, to, settings.sekPerUsd);
-
+    const timeseries = await getEditorTimeseries(editorId, from, to);
     return NextResponse.json({ timeseries });
   } catch (error) {
     console.error("Editor timeseries error:", error);

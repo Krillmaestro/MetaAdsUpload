@@ -4,6 +4,8 @@ import { db, schema } from "@/db";
 import { eq } from "drizzle-orm";
 import { getEvolveSettings } from "@/lib/evolve/settings";
 import { isElevated } from "@/lib/access";
+import { refreshBonusLedger } from "@/lib/bonus-ledger";
+import { invalidateEditorStats } from "@/lib/editor-stats";
 
 export const dynamic = "force-dynamic";
 
@@ -68,6 +70,11 @@ export async function PUT(request: NextRequest) {
     }
 
     const updated = await getEvolveSettings();
+    // Tiers and the SEK rate drive the bonus ledger — re-evaluate it right away.
+    if (body.bonusTiers !== undefined || body.sekPerUsd !== undefined) {
+      await refreshBonusLedger();
+      invalidateEditorStats();
+    }
     return NextResponse.json(updated);
   } catch (error) {
     return NextResponse.json(

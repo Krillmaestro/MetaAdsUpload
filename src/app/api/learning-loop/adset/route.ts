@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db, schema } from "@/db";
 import { eq } from "drizzle-orm";
 import { guardAdmin } from "@/lib/auth-helpers";
+import { invalidateEditorStats } from "@/lib/editor-stats";
 import { applyLinks, unlinkAdset } from "@/lib/learning-loop/link";
 import { VERDICTS, learningToText, hasLearning } from "@/lib/learning-loop/rows";
 
@@ -71,6 +72,7 @@ export async function PATCH(request: NextRequest) {
     else if (typeof b.assignmentId === "string") await applyLinks([{ assignmentId: b.assignmentId, adsetId: b.adsetId }], "manual", session.user.id);
 
     const [row] = await db.select().from(schema.adsetOwners).where(eq(schema.adsetOwners.adsetId, b.adsetId)).limit(1);
+    invalidateEditorStats();
     return NextResponse.json({ owner: row });
   } catch (e) {
     console.error("learning-loop adset PATCH failed:", e);

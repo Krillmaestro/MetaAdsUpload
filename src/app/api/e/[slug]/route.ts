@@ -3,17 +3,20 @@ import { db, schema } from "@/db";
 import { eq } from "drizzle-orm";
 import * as bcrypt from "bcryptjs";
 import { getEditorsOverview, getEditorTimeseries } from "@/lib/editor-stats";
+import { parseDateRange } from "@/lib/date-range";
 
 // Public — no auth. Returns one editor's performance by slug.
 export async function GET(request: NextRequest, { params }: { params: Promise<{ slug: string }> }) {
   try {
     const { slug } = await params;
     const { searchParams } = request.nextUrl;
-    const from = searchParams.get("from") || new Date(Date.now() - 30 * 86400000).toISOString().split("T")[0];
-    const to = searchParams.get("to") || new Date().toISOString().split("T")[0];
+    const { from, to } = parseDateRange(searchParams);
 
     // Find the user behind this slug (for the optional password gate).
-    const [user] = await db.select().from(schema.users).where(eq(schema.users.slug, slug));
+    const [user] = await db
+      .select({ id: schema.users.id, name: schema.users.name, slug: schema.users.slug, userType: schema.users.userType, publicPagePassword: schema.users.publicPagePassword })
+      .from(schema.users)
+      .where(eq(schema.users.slug, slug));
     if (!user) {
       return NextResponse.json({ error: "Editor not found" }, { status: 404 });
     }
@@ -26,6 +29,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       if (!ok) return NextResponse.json({ passwordRequired: true, error: "Wrong password" }, { status: 401 });
     }
 
+    // Shared, cached team overview (the leaderboard needs everyone anyway).
     const overview = await getEditorsOverview({ from, to });
     const editor = overview.editors.find((e) => e.slug === slug || e.editorId === user.id);
 
@@ -67,8 +71,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       });
     }
 
-    const adIds = editor.adsets.flatMap((s) => s.ads.map((a) => a.id));
-    const timeseries = await getEditorTimeseries(adIds, from, to, overview.sekPerUsd);
+    const timeseries = await getEditorTimeseries(editor.editorId, from, to);
 
     // Strip payout *notes* from the public payload (keep amounts/status).
     const safeEditor = {
@@ -84,13 +87,17 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       })),
     };
 
-    return NextResponse.json({
-      editor: safeEditor,
-      timeseries,
-      leaderboard: overview.leaderboard,
-      bonusTiers: overview.bonusTiers,
-      dateRange: overview.dateRange,
-    });
+    return NextResponse.json(
+      {
+        editor: safeEditor,
+        timeseries,
+        leaderboard: overview.leaderboard,
+        bonusTiers: overview.bonusTiers,
+        dateRange: overview.dateRange,
+      },
+      // Open pages can sit on the CDN for a few minutes; password pages never.
+      { headers: { "Cache-Control": user.publicPagePassword ? "private, no-store" : "public, s-maxage=300, stale-while-revalidate=600" } },
+    );
   } catch (error) {
     console.error("Public editor API error:", error);
     return NextResponse.json({ error: "Could not load data" }, { status: 500 });

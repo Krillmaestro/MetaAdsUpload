@@ -1,145 +1,87 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { db, schema } from "@/db";
-import { eq, and } from "drizzle-orm";
-import { metaApi, getAdAccountId } from "@/lib/meta/client";
+import { and, eq, gte, inArray, isNotNull, lte, sql } from "drizzle-orm";
+import { getEvolveSettings } from "@/lib/evolve/settings";
+import { getUsdAccountIds, usdFactor } from "@/lib/money";
 
-interface MetaInsight {
-  date_start: string;
-  date_stop: string;
-  spend: string;
-  impressions: string;
-  reach?: string;
-  clicks?: string;
-  actions?: Array<{ action_type: string; value: string }>;
-  action_values?: Array<{ action_type: string; value: string }>;
-  cost_per_action_type?: Array<{ action_type: string; value: string }>;
-  video_thruplay_watched_actions?: Array<{ action_type: string; value: string }>;
-  video_p25_watched_actions?: Array<{ action_type: string; value: string }>;
-}
+const ISO = /^\d{4}-\d{2}-\d{2}$/;
 
-interface MetaInsightsResponse {
-  data: MetaInsight[];
-}
-
+/**
+ * The signed-in editor's posted ads with their numbers, from the synced
+ * insights table (USD, same conversion and purchase definition as /editors).
+ * Previously one live Meta call per posted ad, on every page load.
+ */
 export async function GET(request: NextRequest) {
   try {
     const session = await auth();
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const userId = session.user.id;
-    const { searchParams } = new URL(request.url);
-    const from = searchParams.get("from") || "";
-    const to = searchParams.get("to") || "";
+    const sp = request.nextUrl.searchParams;
+    const to = ISO.test(sp.get("to") || "") ? sp.get("to")! : new Date().toISOString().split("T")[0];
+    const from = ISO.test(sp.get("from") || "") ? sp.get("from")! : new Date(Date.now() - 6 * 86400000).toISOString().split("T")[0];
 
-    // Get editor's posted assignments that have metaAdId
-    const postedAssignments = await db
-      .select()
-      .from(schema.assignments)
-      .where(
-        and(
-          eq(schema.assignments.assignedToId, userId),
-          eq(schema.assignments.status, "posted")
-        )
-      );
-
-    const assignmentsWithAds = postedAssignments.filter(a => a.metaAdId);
-
-    if (assignmentsWithAds.length === 0) {
-      return NextResponse.json({ insights: [] });
-    }
-
-    // Fetch insights for each ad from Meta API
-    const adAccountId = await getAdAccountId();
-    const insightFields = [
-      "spend", "impressions", "reach", "clicks",
-      "actions", "action_values", "cost_per_action_type",
-      "video_thruplay_watched_actions", "video_p25_watched_actions",
-    ].join(",");
-
-    const results = await Promise.allSettled(
-      assignmentsWithAds.map(async (assignment) => {
-        const timeRange = from && to
-          ? `&time_range=${encodeURIComponent(JSON.stringify({ since: from, until: to }))}`
-          : "";
-
-        const data = await metaApi<MetaInsightsResponse>(
-          `/${assignment.metaAdId}/insights?fields=${insightFields}&date_preset=${!from ? "last_7d" : ""}${timeRange}`
-        );
-
-        const insight = data.data?.[0];
-        if (!insight) {
-          return {
-            assignmentId: assignment.id,
-            adId: assignment.metaAdId,
-            adsetId: assignment.metaAdsetId,
-            campaignId: assignment.metaCampaignId,
-            autoName: assignment.autoName || assignment.title,
-            spend: 0,
-            impressions: 0,
-            reach: 0,
-            clicks: 0,
-            purchases: 0,
-            purchaseValue: 0,
-            roas: 0,
-            cpa: 0,
-            ctr: 0,
-            cpc: 0,
-            cpm: 0,
-          };
-        }
-
-        const spend = parseFloat(insight.spend) || 0;
-        const impressions = parseInt(insight.impressions) || 0;
-        const reach = parseInt(insight.reach || "0") || 0;
-        const clicks = parseInt(insight.clicks || "0") || 0;
-
-        const purchases = insight.actions?.find(
-          a => a.action_type === "purchase" || a.action_type === "offsite_conversion.fb_pixel_purchase"
-        );
-        const purchaseValue = insight.action_values?.find(
-          a => a.action_type === "purchase" || a.action_type === "offsite_conversion.fb_pixel_purchase"
-        );
-
-        const purchaseCount = parseInt(purchases?.value || "0") || 0;
-        const purchaseVal = parseFloat(purchaseValue?.value || "0") || 0;
-        const roas = spend > 0 ? purchaseVal / spend : 0;
-        const cpa = purchaseCount > 0 ? spend / purchaseCount : 0;
-        const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
-        const cpc = clicks > 0 ? spend / clicks : 0;
-        const cpm = impressions > 0 ? (spend / impressions) * 1000 : 0;
-
-        return {
-          assignmentId: assignment.id,
-          adId: assignment.metaAdId,
-          adsetId: assignment.metaAdsetId,
-          campaignId: assignment.metaCampaignId,
-          autoName: assignment.autoName || assignment.title,
-          spend,
-          impressions,
-          reach,
-          clicks,
-          purchases: purchaseCount,
-          purchaseValue: purchaseVal,
-          roas,
-          cpa,
-          ctr,
-          cpc,
-          cpm,
-        };
+    const posted = await db
+      .select({
+        id: schema.assignments.id,
+        title: schema.assignments.title,
+        autoName: schema.assignments.autoName,
+        metaAdId: schema.assignments.metaAdId,
+        metaAdsetId: schema.assignments.metaAdsetId,
+        metaCampaignId: schema.assignments.metaCampaignId,
       })
-    );
+      .from(schema.assignments)
+      .where(and(eq(schema.assignments.assignedToId, session.user.id), eq(schema.assignments.status, "posted"), isNotNull(schema.assignments.metaAdId)));
+    if (posted.length === 0) return NextResponse.json({ insights: [] });
 
-    const insights = results
-      .filter((r) => r.status === "fulfilled")
-      .map(r => (r as PromiseFulfilledResult<typeof results extends PromiseSettledResult<infer U>[] ? U : never>).value);
+    const [settings, usdAccounts] = await Promise.all([getEvolveSettings(), getUsdAccountIds()]);
+    const factor = usdFactor(usdAccounts, settings.sekPerUsd);
+    const adIds = posted.map((p) => p.metaAdId!);
+    const rows = await db
+      .select({
+        adId: schema.insights.entityId,
+        spend: sql<number>`coalesce(sum(${schema.insights.spend} * ${factor}),0)`,
+        impressions: sql<number>`coalesce(sum(${schema.insights.impressions}),0)`,
+        reach: sql<number>`coalesce(sum(${schema.insights.reach}),0)`,
+        clicks: sql<number>`coalesce(sum(${schema.insights.clicks}),0)`,
+        purchases: sql<number>`coalesce(sum(${schema.insights.purchases}),0)`,
+        purchaseValue: sql<number>`coalesce(sum(${schema.insights.purchaseValue} * ${factor}),0)`,
+      })
+      .from(schema.insights)
+      .where(and(eq(schema.insights.entityType, "ad"), inArray(schema.insights.entityId, adIds), gte(schema.insights.dateStart, from), lte(schema.insights.dateStart, to)))
+      .groupBy(schema.insights.entityId);
+    const byAd = new Map(rows.map((r) => [r.adId, r]));
 
-    return NextResponse.json({ insights });
+    const insights = posted.map((a) => {
+      const r = byAd.get(a.metaAdId!);
+      const spend = Number(r?.spend) || 0;
+      const impressions = Number(r?.impressions) || 0;
+      const clicks = Number(r?.clicks) || 0;
+      const purchases = Number(r?.purchases) || 0;
+      const purchaseValue = Number(r?.purchaseValue) || 0;
+      return {
+        assignmentId: a.id,
+        adId: a.metaAdId,
+        adsetId: a.metaAdsetId,
+        campaignId: a.metaCampaignId,
+        autoName: a.autoName || a.title,
+        spend,
+        impressions,
+        reach: Number(r?.reach) || 0,
+        clicks,
+        purchases,
+        purchaseValue,
+        roas: spend > 0 ? purchaseValue / spend : 0,
+        cpa: purchases > 0 ? spend / purchases : 0,
+        ctr: impressions > 0 ? (clicks / impressions) * 100 : 0,
+        cpc: clicks > 0 ? spend / clicks : 0,
+        cpm: impressions > 0 ? (spend / impressions) * 1000 : 0,
+      };
+    });
+
+    return NextResponse.json({ insights, currency: "USD", dateRange: { from, to } });
   } catch (error) {
     console.error("Editor insights error:", error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Failed to fetch insights" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Failed to fetch insights" }, { status: 500 });
   }
 }

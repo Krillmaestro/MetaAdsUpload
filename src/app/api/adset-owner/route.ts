@@ -3,6 +3,8 @@ import { auth } from "@/auth";
 import { db, schema } from "@/db";
 import { eq, inArray } from "drizzle-orm";
 import { isElevated } from "@/lib/access";
+import { refreshBonusLedger } from "@/lib/bonus-ledger";
+import { invalidateEditorStats } from "@/lib/editor-stats";
 
 // GET ?adsetId=... | ?adsetIds=a,b,c
 export async function GET(request: NextRequest) {
@@ -75,6 +77,9 @@ export async function POST(request: NextRequest) {
     if (videoEditorId) {
       await db.update(schema.adBonuses).set({ editorId: videoEditorId, updatedAt: now }).where(eq(schema.adBonuses.adId, adsetId));
     }
+    // Evaluate this ad set now — the pages no longer recompute on view.
+    await refreshBonusLedger([adsetId]);
+    invalidateEditorStats();
 
     return NextResponse.json({ owner: row });
   } catch (error) {
@@ -122,6 +127,7 @@ export async function PATCH(request: NextRequest) {
       .onConflictDoUpdate({ target: schema.adsetOwners.adsetId, set })
       .returning();
 
+    invalidateEditorStats();
     return NextResponse.json({ owner: row });
   } catch (error) {
     console.error("adset-owner PATCH error:", error);
@@ -138,6 +144,7 @@ export async function DELETE(request: NextRequest) {
     const { adsetId } = await request.json();
     if (!adsetId) return NextResponse.json({ error: "adsetId is required" }, { status: 400 });
     await db.delete(schema.adsetOwners).where(eq(schema.adsetOwners.adsetId, adsetId));
+    invalidateEditorStats();
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("adset-owner DELETE error:", error);
