@@ -1,10 +1,11 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
-import { Store, RefreshCw, AlertTriangle, Plus, Phone, Mail, Globe, Download, Search, ChevronDown, ChevronRight, X, History, Send, Inbox, FileText, List, Star } from "lucide-react";
+import { Store, RefreshCw, AlertTriangle, Plus, Phone, Mail, Globe, Download, Search, ChevronDown, ChevronRight, X, History, Send, Inbox, FileText, List, Star, Receipt } from "lucide-react";
 import { toast } from "sonner";
 import { LEAD_STATUSES, CALL_OUTCOMES, statusMeta } from "@/lib/butiker/status";
 import { MallarView } from "./mallar-view";
+import { OrdrarView } from "./ordrar-view";
 
 type Lead = {
   id: string; name: string; type: string | null; address: string | null; postalCode: string | null;
@@ -52,7 +53,7 @@ export default function ButikerPage() {
   const [sort, setSort] = useState<"prio" | "ort">("prio");
   const [limit, setLimit] = useState(PAGE);
   const [open, setOpen] = useState<string | null>(null);
-  const [view, setView] = useState<"lista" | "intresserade" | "mallar">("lista");
+  const [view, setView] = useState<"lista" | "intresserade" | "kunder" | "mallar">("lista");
   const [answered, setAnswered] = useState<"obesvarade" | "besvarade">("obesvarade");
   const [history, setHistory] = useState<Record<string, LeadEvent[]>>({});
   const [mails, setMails] = useState<Record<string, LeadEmail[]>>({});
@@ -241,7 +242,7 @@ export default function ButikerPage() {
       )}
 
       <div className="flex gap-1 border-b border-white/5">
-        {([["lista", "Kontaktlista", List], ["intresserade", "Intresserade", Star], ["mallar", "Mejlmallar", FileText]] as const).map(([k, label, Icon]) => (
+        {([["lista", "Kontaktlista", List], ["intresserade", "Intresserade", Star], ["kunder", "Kunder & ordrar", Receipt], ["mallar", "Mejlmallar", FileText]] as const).map(([k, label, Icon]) => (
           <button key={k} onClick={() => setView(k)}
             className={`px-3 py-2 text-sm flex items-center gap-2 border-b-2 -mb-px ${view === k ? "border-cyan-400 text-white" : "border-transparent text-slate-500 hover:text-slate-300"}`}>
             <Icon className="h-4 w-4" /> {label}
@@ -251,6 +252,8 @@ export default function ButikerPage() {
           </button>
         ))}
       </div>
+
+      {view === "kunder" && <OrdrarView leads={leads} />}
 
       {view === "mallar" && <MallarView example={[...leads].filter((l) => l.email && l.priority != null).sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0))[0] ?? leads[0] ?? null} />}
 

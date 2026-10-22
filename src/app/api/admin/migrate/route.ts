@@ -2,11 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { neon } from "@neondatabase/serverless";
 import { auth } from "@/auth";
 import { MIGRATION_0036 } from "@/db/migrations/0036";
+import { MIGRATION_0037 } from "@/db/migrations/0037";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-const MIGRATIONS = { [MIGRATION_0036.name]: MIGRATION_0036 } as const;
+const MIGRATIONS = { [MIGRATION_0036.name]: MIGRATION_0036, [MIGRATION_0037.name]: MIGRATION_0037 } as const;
 
 /**
  * Superadmin-only: apply a bundled, idempotent migration in production.

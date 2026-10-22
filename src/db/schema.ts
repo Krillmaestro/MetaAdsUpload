@@ -1238,3 +1238,33 @@ export const retailLeadEmails = pgTable("retail_lead_emails", {
   index("retail_lead_emails_lead_idx").on(table.leadId, table.sentAt),
   index("retail_lead_emails_template_idx").on(table.templateId),
 ]);
+
+// B2B-ordrar: vad varje butik köpt, vad vi tjänar och Noahs provision.
+// Raderna (produkt, antal, pris, varukostnad) fryses när ordern sparas.
+export const b2bOrders = pgTable("b2b_orders", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  leadId: text("lead_id"), // retail_leads.id when the shop is in the call list
+  customerName: text("customer_name").notNull(),
+  orgNumber: text("org_number"),
+  contactName: text("contact_name"),
+  contactEmail: text("contact_email"),
+  invoiceEmail: text("invoice_email"),
+  city: text("city"),
+  seller: text("seller"), // Noah | Erica | Kristoffer
+  kind: text("kind").notNull().default("order"), // order | visning | kredit
+  orderDate: date("order_date").notNull(),
+  shopifyOrder: text("shopify_order"),
+  fortnoxInvoice: text("fortnox_invoice"),
+  invoiceStatus: text("invoice_status").notNull().default("ej_fakturerad"), // ej_fakturerad | skickad | betald | ingen
+  paidAt: date("paid_at"),
+  lines: jsonb("lines").$type<Array<{ product: string; qty: number; price: number; cost: number }>>().notNull().default([]),
+  shippingCost: real("shipping_cost").notNull().default(0),
+  commissionPaidAt: date("commission_paid_at"),
+  note: text("note"),
+  createdBy: text("created_by"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => [
+  index("b2b_orders_date_idx").on(table.orderDate),
+  index("b2b_orders_lead_idx").on(table.leadId),
+]);
