@@ -237,6 +237,9 @@ async function step(job: PublishJob, deadline: number): Promise<Outcome> {
       if (!assignment) throw new Error("Assignment not found");
       const acct = await getAdAccountId();
       await metaApi(`/${acct}`, { params: { fields: "id" } }); // token + account alive
+      // The page comes from the template when it has one; otherwise from the
+      // active connection in Settings (whose page may belong to another account).
+      let pageSource: "template" | "settings" = "settings";
       state.pageId = await getPageId();
       state.pixelId = (await getPixelId()) ?? undefined;
       // copy
@@ -246,6 +249,7 @@ async function step(job: PublishJob, deadline: number): Promise<Outcome> {
         const [t] = await db.select().from(schema.templates).where(eq(schema.templates.id, cfg.templateId));
         if (t) {
           if (t.pixelId) state.pixelId = t.pixelId;
+          if (t.pageId) { state.pageId = t.pageId; pageSource = "template"; }
           tplTargeting = { countries: (t.targetCountries as string[] | null) ?? undefined, ageMin: t.ageMin, ageMax: t.ageMax, genders: (t.genders as number[] | null) ?? null };
           if (!headlines.length) headlines = (t.headlines as string[]) || [];
           if (!primaryTexts.length) primaryTexts = (t.primaryTexts as string[]) || [];
@@ -269,7 +273,7 @@ async function step(job: PublishJob, deadline: number): Promise<Outcome> {
       }
       const country = assignment.countryId ? (await db.select().from(schema.countries).where(eq(schema.countries.id, assignment.countryId)))[0] : null;
       state.adsetName = cfg.adsetName || assignment.autoName || assignment.title;
-      pushLog(state, `Preflight ok · ${state.files?.length} files · ${state.budgetType} · page ${state.pageId}`);
+      pushLog(state, `Preflight ok · ${state.files?.length} files · ${state.budgetType} · account ${acct} · page ${state.pageId} (${pageSource})`);
       const countries = metaCountries(tplTargeting.countries?.length ? tplTargeting.countries : [country?.code || "SE"]);
       (state as PublishJobState & { countryCode?: string }).countryCode = countries.length === 1 ? countries[0] : (metaCountries([country?.code])[0] ?? countries[0]);
       (state as PublishJobState & { targeting?: Record<string, unknown> }).targeting = {

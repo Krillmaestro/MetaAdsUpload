@@ -55,6 +55,7 @@ export async function POST(request: NextRequest) {
       angleName: body.angleName || null,
       pixelId: body.pixelId || null,
       adAccountId: body.adAccountId || null,
+      pageId: body.pageId || null,
     }).returning();
     return NextResponse.json(template);
   } catch (err) {
@@ -85,7 +86,7 @@ export async function PATCH(request: NextRequest) {
       "landingPages", "targetCountries", "ageMin", "ageMax", "genders",
       "optimizationGoal", "conversionEvent", "bidStrategy",
       "adsetNameTemplate", "adNameTemplate", "productName", "angleName", "pixelId",
-      "adAccountId",
+      "adAccountId", "pageId",
     ] as const;
 
     const updates: Record<string, unknown> = { updatedAt: new Date() };

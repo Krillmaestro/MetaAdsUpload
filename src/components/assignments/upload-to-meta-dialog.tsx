@@ -48,6 +48,9 @@ interface Defaults {
   country: { id: string; name: string; code: string } | null;
   campaigns: Array<{ id: string; name: string; status: string; isCbo: boolean; dailyBudget: number | null }>;
   suggestedCampaignId: string | null;
+  adAccountId?: string | null;
+  pageId?: string | null;
+  pageSource?: "template" | "settings" | null;
   templates: Array<{ id: number; name: string; landingPages: string[] | null; dailyBudget: number | null; currency: string | null }>;
   templateId: number | null;
   landingPage: string;
@@ -98,7 +101,7 @@ export function UploadToMetaDialog({
     setLoading(true);
     fetch(`/api/assignments/${assignment.id}/publish-defaults`)
       .then(async (r) => {
-        const data = await r.json();
+        const data = await r.json().catch(() => ({ error: `HTTP ${r.status} ${r.statusText} (not JSON – signed out?)` }));
         if (!r.ok) throw new Error(data.error || "Could not load defaults");
         return data as Defaults;
       })
@@ -160,7 +163,7 @@ export function UploadToMetaDialog({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({ error: `HTTP ${res.status} ${res.statusText} (not JSON – signed out?)` }));
       if (!res.ok) throw new Error(data.error || "Upload failed");
       setJobId(data.jobId);
       toast.success(data.existing ? "Upload already running — showing its progress" : "Upload started on the server");
@@ -227,6 +230,17 @@ export function UploadToMetaDialog({
                 />
               )}
             </Field>
+
+            {/* Where the ads end up */}
+            {(defaults.adAccountId || defaults.pageId) && (
+              <div className={cn("rounded-lg border p-2.5 text-xs", defaults.pageSource === "settings" ? "border-amber-500/30 bg-amber-500/5 text-amber-200" : "border-white/10 bg-white/[0.02] text-slate-400")}>
+                <span className="font-mono">{defaults.adAccountId ?? "?"}</span>
+                {" · page "}
+                <span className="font-mono">{defaults.pageId ?? "none"}</span>
+                {defaults.pageSource === "settings" && " – from Settings (the template has no page of its own; set one on the template if this account should post from another page)"}
+                {defaults.pageSource === "template" && " – from the template"}
+              </div>
+            )}
 
             {/* Template */}
             <Field label="Copy template">

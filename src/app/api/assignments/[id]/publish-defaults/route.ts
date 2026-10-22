@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { db, schema } from "@/db";
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
-import { getAdAccountId } from "@/lib/meta/client";
+import { getAdAccountId, getPageId } from "@/lib/meta/client";
 import { listDeliverableFiles, APPROVED } from "@/lib/deliverables";
 import { isElevated } from "@/lib/access";
 
@@ -35,10 +35,26 @@ export async function GET(
         assignment.countryId ? eq(schema.publishDefaults.countryId, assignment.countryId) : isNull(schema.publishDefaults.countryId),
       ));
 
-    // Campaigns of the active ad account, newest first. Containers are never suggested.
+    const templates = await db
+      .select({ id: schema.templates.id, name: schema.templates.name, landingPages: schema.templates.landingPages, dailyBudget: schema.templates.dailyBudget, currency: schema.templates.currency, adAccountId: schema.templates.adAccountId, pageId: schema.templates.pageId })
+      .from(schema.templates)
+      .orderBy(desc(schema.templates.id));
+    // Brief's template > last used for this product+country > a template named
+    // after the product > nothing (the admin picks; never another product's copy).
+    const byProduct = product ? templates.find((t) => words(t.name).includes(product.name.toLowerCase()) || words(t.name).includes(product.code.toLowerCase())) : undefined;
+    const templateId = assignment.publishTemplateId ?? defaults?.templateId ?? byProduct?.id ?? null;
+    const template = templates.find((t) => t.id === templateId) ?? null;
+
+    // Campaigns of the account the template publishes to (else the active
+    // account in Settings), newest first. Containers are never suggested.
+    const formatAct = (a: string | null | undefined) => (a ? (a.startsWith("act_") ? a : `act_${a}`) : null);
     let accountId: string | null = null;
     try { accountId = await getAdAccountId(); } catch { /* no connection: show everything cached */ }
-    const act = accountId ? (accountId.startsWith("act_") ? accountId : `act_${accountId}`) : null;
+    const act = formatAct(template?.adAccountId) ?? formatAct(accountId);
+    let settingsPageId: string | null = null;
+    try { settingsPageId = await getPageId(); } catch { /* no page in Settings */ }
+    const pageId = template?.pageId || settingsPageId;
+    const pageSource: "template" | "settings" | null = template?.pageId ? "template" : settingsPageId ? "settings" : null;
     const campaigns = (await db
       .select({ id: schema.campaignsCache.id, name: schema.campaignsCache.name, status: schema.campaignsCache.status, dailyBudget: schema.campaignsCache.dailyBudget, lifetimeBudget: schema.campaignsCache.lifetimeBudget, adAccountId: schema.campaignsCache.adAccountId, createdTime: schema.campaignsCache.createdTime })
       .from(schema.campaignsCache)
@@ -71,16 +87,6 @@ export async function GET(
     const best = [...campaigns].sort((a, b) => score(b.name, b.status) - score(a.name, a.status))[0];
     const suggestedCampaign = remembered ?? (best && score(best.name, best.status) >= 4 ? best : null);
 
-    const templates = await db
-      .select({ id: schema.templates.id, name: schema.templates.name, landingPages: schema.templates.landingPages, dailyBudget: schema.templates.dailyBudget, currency: schema.templates.currency })
-      .from(schema.templates)
-      .orderBy(desc(schema.templates.id));
-    // Brief's template > last used for this product+country > a template named
-    // after the product > nothing (the admin picks; never another product's copy).
-    const byProduct = product ? templates.find((t) => words(t.name).includes(product.name.toLowerCase()) || words(t.name).includes(product.code.toLowerCase())) : undefined;
-    const templateId = assignment.publishTemplateId ?? defaults?.templateId ?? byProduct?.id ?? null;
-    const template = templates.find((t) => t.id === templateId) ?? null;
-
     const files = (await listDeliverableFiles(id)).map((f) => ({
       id: f.id, hookLabel: f.hookLabel, filename: f.filename, r2Url: f.r2Url, r2Key: f.r2Key, reviewStatus: f.reviewStatus, versionNumber: f.versionNumber, metaAdId: f.metaAdId,
       type: /\.(jpg|jpeg|png|webp)$/i.test(f.filename) ? "image" : "video",
@@ -91,6 +97,9 @@ export async function GET(
       country: country ? { id: country.id, name: country.name, code: country.code } : null,
       campaigns,
       suggestedCampaignId: suggestedCampaign?.id ?? null,
+      adAccountId: act,
+      pageId,
+      pageSource,
       templates,
       templateId,
       landingPage: assignment.landingPage || defaults?.landingPage || template?.landingPages?.[0] || "",

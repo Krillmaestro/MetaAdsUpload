@@ -290,6 +290,11 @@ export const templates = pgTable("templates", {
   // target the future US ad account while Nordic templates stay on Glimmora.
   adAccountId: text("ad_account_id"),
 
+  // Facebook page the ads are posted from. null = the connection's active page
+  // in Settings – which belongs to whatever account is active there, so a
+  // template for another ad account must carry its own page.
+  pageId: text("page_id"),
+
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

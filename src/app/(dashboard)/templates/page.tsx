@@ -44,6 +44,7 @@ interface Template {
   productName: string | null;
   angleName: string | null;
   adAccountId: string | null;
+  pageId: string | null;
 }
 
 interface AdAccountOption { id: string; name: string; currency: string; status?: number }
@@ -65,6 +66,7 @@ interface FormState {
   pixelId: string;
   productName: string;
   adAccountId: string;
+  pageId: string;
 }
 
 const EMPTY_FORM: FormState = {
@@ -84,6 +86,7 @@ const EMPTY_FORM: FormState = {
   pixelId: "",
   productName: "",
   adAccountId: "",
+  pageId: "",
 };
 
 export default function TemplatesPage() {
@@ -141,6 +144,7 @@ export default function TemplatesPage() {
       pixelId: t.pixelId || "",
       productName: t.productName || "",
       adAccountId: t.adAccountId || "",
+      pageId: t.pageId || "",
     });
     setDialogOpen(true);
   };
@@ -161,6 +165,7 @@ export default function TemplatesPage() {
         pixelId: form.pixelId || null,
         productName: form.productName || null,
         adAccountId: form.adAccountId || null,
+        pageId: form.pageId.trim() || null,
       };
 
       if (editingId) {
@@ -220,6 +225,7 @@ export default function TemplatesPage() {
       pixelId: t.pixelId || "",
       productName: t.productName || "",
       adAccountId: t.adAccountId || "",
+      pageId: t.pageId || "",
     });
     setDialogOpen(true);
   };
@@ -401,6 +407,18 @@ export default function TemplatesPage() {
               <p className="text-[10px] text-slate-600">
                 Alla uploads med den här templaten skapas i valt konto (kampanjer/ad sets listas därifrån). Tomt = aktiva kontot i Settings.
               </p>
+            </div>
+
+            {/* ─── FACEBOOK PAGE ─── */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-slate-400 uppercase tracking-wider">Facebook-sida (page id)</label>
+              <input
+                value={form.pageId}
+                onChange={(e) => setForm({ ...form, pageId: e.target.value })}
+                placeholder="Tomt = sidan som är vald i Settings"
+                className="w-full rounded-md bg-white/5 border border-white/10 px-3 py-2 text-sm text-white font-mono placeholder:text-slate-600"
+              />
+              <p className="text-[11px] text-slate-500">Annonserna postas från den här sidan. Sidan i Settings hör till det konto som är aktivt där, så en mall för ett annat annonskonto behöver sin egen sida.</p>
             </div>
 
             {/* ─── AD COPY ─── */}
