@@ -28,7 +28,7 @@ import { getCampaigns, upsertCampaignsCache } from "./campaigns";
 import { reconcilePostedAssignments } from "@/lib/assignments/reconcile-posted";
 import { getAdSets } from "./adsets";
 import { type Ad } from "./ads";
-import { metaApi, metaApiPaginated, resolveAccount, withAdAccount, getAdAccountId } from "./client";
+import { metaApi, metaApiPaginated, resolveAccount, withAdAccount, getAdAccountId, MetaApiError } from "./client";
 import { withLock } from "@/lib/sync-lock";
 import { refreshBonusLedger } from "@/lib/bonus-ledger";
 
@@ -352,12 +352,46 @@ export async function runSync(opts: { days?: number; deadline?: number } = {}) {
   return result ?? { skipped: "another sync is running" };
 }
 
+/** Meta refuses a sync insights call whose result has too many rows (error 100 / subcode 1487534). */
+function isTooManyRows(e: unknown): boolean {
+  if (e instanceof MetaApiError && (e.metaErrorSubcode === 1487534 || /too many rows|för många rader|reduce the amount of data/i.test(e.message))) return true;
+  return e instanceof Error && /too many rows|för många rader|reduce the amount of data/i.test(e.message);
+}
+
+/**
+ * Ad-level daily insights for a date window, shrinking the request until Meta
+ * accepts it: the whole window → one day at a time → one campaign at a time
+ * for that day. Accounts with thousands of archived ads (ApotekHunden) exceed
+ * Meta's row limit even for a two-day window, which used to fail the whole
+ * account's sync.
+ */
+async function getAdInsightsWithinLimits(since: string, until: string, campaignIds: string[]): Promise<InsightData[]> {
+  const base = { level: "ad" as const, timeIncrement: 1, includeVideoMetrics: true, includeAllAdStatuses: true };
+  try {
+    return await getInsights({ ...base, dateRange: { since, until } });
+  } catch (e) {
+    if (!isTooManyRows(e)) throw e;
+  }
+  if (since !== until) {
+    const out: InsightData[] = [];
+    for (let day = until; day >= since; day = addDays(day, -1)) out.push(...(await getAdInsightsWithinLimits(day, day, campaignIds)));
+    return out;
+  }
+  // a single day is still too big: one campaign at a time
+  const out: InsightData[] = [];
+  for (const campaignId of campaignIds) {
+    out.push(...(await getInsights({ ...base, entityId: campaignId, dateRange: { since, until } })));
+  }
+  return out;
+}
+
 async function syncOneAccount(adAccountId: string, days: number, deadline: number) {
   const today = daysAgo(0);
   const since = daysAgo(days);
 
   // 1. Campaign metadata (budgets included — the Upload dialog reads CBO/ABO from here)
-  const campaignCount = await upsertCampaignsCache(adAccountId, await getCampaigns());
+  const campaigns = await getCampaigns();
+  const campaignCount = await upsertCampaignsCache(adAccountId, campaigns);
 
   // 1b. Ad set metadata → adsets_cache. Best-effort: a failure here must not stop the insights.
   let adsetCount = 0;
@@ -411,13 +445,7 @@ async function syncOneAccount(adAccountId: string, days: number, deadline: numbe
   for (let chunkEnd = today; chunkEnd >= since; ) {
     if (Date.now() > deadline) { complete = false; break; }
     const chunkStart = addDays(chunkEnd, -(AD_INSIGHT_CHUNK_DAYS - 1)) > since ? addDays(chunkEnd, -(AD_INSIGHT_CHUNK_DAYS - 1)) : since;
-    const chunk = await getInsights({
-      level: "ad",
-      dateRange: { since: chunkStart, until: chunkEnd },
-      timeIncrement: 1,
-      includeVideoMetrics: true,
-      includeAllAdStatuses: true,
-    });
+    const chunk = await getAdInsightsWithinLimits(chunkStart, chunkEnd, campaigns.map((c) => c.id));
     await upsertAdStubs(chunk, adAccountId);
     adRowCount += await upsertInsights(chunk.filter((r) => r.ad_id).map((r) => toRow(r, r.ad_id!, "ad", adAccountId)));
     chunkEnd = addDays(chunkStart, -1);
