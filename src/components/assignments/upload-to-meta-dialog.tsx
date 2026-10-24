@@ -27,7 +27,6 @@ import {
 import {
   Rocket,
   Loader2,
-  CheckCircle2,
   FileVideo,
   FileImage,
   ChevronDown,
@@ -48,6 +47,8 @@ interface Defaults {
   country: { id: string; name: string; code: string } | null;
   campaigns: Array<{ id: string; name: string; status: string; isCbo: boolean; dailyBudget: number | null }>;
   suggestedCampaignId: string | null;
+  campaignsSource?: "live" | "cache";
+  campaignsWarning?: string | null;
   adAccountId?: string | null;
   pageId?: string | null;
   pageSource?: "template" | "settings" | null;
@@ -108,7 +109,9 @@ export function UploadToMetaDialog({
       .then((d) => {
         if (cancelled) return;
         setDefaults(d);
-        setCampaignId(d.suggestedCampaignId ?? (d.campaigns[0]?.id ?? NEW_CAMPAIGN));
+        // The remembered/guessed campaign or nothing — never "the newest one",
+        // which once put a WoofLabs upload in the wrong campaign.
+        setCampaignId(d.suggestedCampaignId ?? (d.campaigns.length ? "" : NEW_CAMPAIGN));
         setNewCampaignName(`${d.country?.code ?? ""} ${d.product?.name ?? assignment.autoName ?? assignment.title} ABO`.trim());
         setTemplateId(d.templateId != null ? String(d.templateId) : "");
         setLandingPage((d.landingPages?.length ? d.landingPages : [d.landingPage ?? ""]).join("\n"));
@@ -203,7 +206,12 @@ export function UploadToMetaDialog({
         ) : defaults ? (
           <div className="space-y-4">
             {/* Campaign */}
-            <Field label="Campaign" hint={defaults.lastUsed?.campaignName ? `Last time: ${defaults.lastUsed.campaignName}` : defaults.suggestedCampaignId ? "Suggested from the campaign name" : undefined}>
+            <Field label="Campaign" hint={defaults.lastUsed?.campaignName ? `Last time: ${defaults.lastUsed.campaignName}` : defaults.suggestedCampaignId ? "Suggested from the campaign name" : defaults.campaignsSource === "live" ? `${defaults.campaigns.length} campaigns, live from Meta` : undefined}>
+              {defaults.campaignsWarning && (
+                <p className="mb-1.5 flex items-start gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/5 p-2 text-[11px] text-amber-200">
+                  <AlertCircle className="h-3.5 w-3.5 mt-px flex-shrink-0" /> {defaults.campaignsWarning}
+                </p>
+              )}
               <Select value={campaignId} onValueChange={setCampaignId} items={[...defaults.campaigns.map((c) => ({ value: c.id, label: c.isCbo ? `${c.name} · CBO` : c.name })), { value: NEW_CAMPAIGN, label: "+ New campaign" }]}>
                 <SelectTrigger className="bg-white/[0.03] border-white/10">
                   <SelectValue placeholder="Choose campaign" />

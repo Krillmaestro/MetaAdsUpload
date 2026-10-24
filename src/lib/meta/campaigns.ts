@@ -1,4 +1,6 @@
 import { metaApi, metaApiPaginated, getAdAccountId } from "./client";
+import { db, schema } from "@/db";
+import { sql } from "drizzle-orm";
 
 export interface Campaign {
   id: string;
@@ -26,6 +28,41 @@ export async function getCampaigns(limit = 200, statusFilter?: "ACTIVE" | "PAUSE
     `/${await getAdAccountId()}/campaigns`,
     { params }
   );
+}
+
+/**
+ * Write what Meta just returned into campaigns_cache, stamped with the ad
+ * account it came from. Every reader of the cache (Upload-to-Meta dialog,
+ * Learning Loop, campaign picker) filters on ad_account_id, so a row without
+ * one is invisible in the account views — always go through this helper.
+ */
+export async function upsertCampaignsCache(adAccountId: string, campaigns: Campaign[]): Promise<number> {
+  const act = adAccountId.startsWith("act_") ? adAccountId : `act_${adAccountId}`;
+  const money = (v?: string) => (v ? parseFloat(v) / 100 : null);
+  const date = (v?: string) => (v ? new Date(v) : null);
+  let n = 0;
+  for (let i = 0; i < campaigns.length; i += 100) {
+    const chunk = campaigns.slice(i, i + 100);
+    if (!chunk.length) continue;
+    await db.insert(schema.campaignsCache).values(chunk.map((c) => ({
+      id: c.id, adAccountId: act, name: c.name, status: c.status, objective: c.objective ?? null,
+      dailyBudget: money(c.daily_budget), lifetimeBudget: money(c.lifetime_budget), budgetRemaining: money(c.budget_remaining),
+      buyingType: c.buying_type ?? null, startTime: date(c.start_time), stopTime: date(c.stop_time),
+      createdTime: date(c.created_time), updatedTime: date(c.updated_time),
+    }))).onConflictDoUpdate({
+      target: schema.campaignsCache.id,
+      set: {
+        adAccountId: sql.raw("excluded.ad_account_id"), name: sql.raw("excluded.name"), status: sql.raw("excluded.status"),
+        objective: sql.raw("excluded.objective"), dailyBudget: sql.raw("excluded.daily_budget"), lifetimeBudget: sql.raw("excluded.lifetime_budget"),
+        budgetRemaining: sql.raw("excluded.budget_remaining"), buyingType: sql.raw("excluded.buying_type"),
+        startTime: sql.raw("excluded.start_time"), stopTime: sql.raw("excluded.stop_time"),
+        createdTime: sql.raw("coalesce(excluded.created_time, campaigns_cache.created_time)"), updatedTime: sql.raw("excluded.updated_time"),
+        syncedAt: sql`now()`,
+      },
+    });
+    n += chunk.length;
+  }
+  return n;
 }
 
 export async function createCampaign(params: {

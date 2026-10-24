@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { db, schema } from "@/db";
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
-import { getAdAccountId, getPageId } from "@/lib/meta/client";
+import { getAdAccountId, getPageId, withAdAccount } from "@/lib/meta/client";
+import { getCampaigns, upsertCampaignsCache } from "@/lib/meta/campaigns";
 import { listDeliverableFiles, APPROVED } from "@/lib/deliverables";
 import { isElevated } from "@/lib/access";
 
@@ -55,13 +56,38 @@ export async function GET(
     try { settingsPageId = await getPageId(); } catch { /* no page in Settings */ }
     const pageId = template?.pageId || settingsPageId;
     const pageSource: "template" | "settings" | null = template?.pageId ? "template" : settingsPageId ? "settings" : null;
-    const campaigns = (await db
-      .select({ id: schema.campaignsCache.id, name: schema.campaignsCache.name, status: schema.campaignsCache.status, dailyBudget: schema.campaignsCache.dailyBudget, lifetimeBudget: schema.campaignsCache.lifetimeBudget, adAccountId: schema.campaignsCache.adAccountId, createdTime: schema.campaignsCache.createdTime })
-      .from(schema.campaignsCache)
-      .where(inArray(schema.campaignsCache.status, ["ACTIVE", "PAUSED"]))
-      .orderBy(desc(schema.campaignsCache.createdTime)))
-      .filter((c) => !act || !c.adAccountId || c.adAccountId === act)
-      .map((c) => ({ id: c.id, name: c.name, status: c.status, isCbo: !!(c.dailyBudget || c.lifetimeBudget), dailyBudget: c.dailyBudget }));
+    // Live from Meta for that account (and refresh the cache on the way), so a
+    // campaign created an hour ago is in the list. The cache is only the
+    // fallback when Meta cannot be reached — then say so in the dialog.
+    type DialogCampaign = { id: string; name: string; status: string; isCbo: boolean; dailyBudget: number | null; createdTime: Date | null };
+    let campaigns: DialogCampaign[] = [];
+    let campaignsSource: "live" | "cache" = "cache";
+    let campaignsWarning: string | null = null;
+    if (act) {
+      try {
+        const live = await withAdAccount(act, () => getCampaigns());
+        campaigns = live
+          .filter((c) => c.status === "ACTIVE" || c.status === "PAUSED")
+          .map((c) => ({ id: c.id, name: c.name, status: c.status, isCbo: !!(c.daily_budget || c.lifetime_budget), dailyBudget: c.daily_budget ? parseFloat(c.daily_budget) / 100 : null, createdTime: c.created_time ? new Date(c.created_time) : null }));
+        campaignsSource = "live";
+        try { await upsertCampaignsCache(act, live); } catch (e) { console.error("campaigns_cache refresh failed:", e); }
+      } catch (e) {
+        campaignsWarning = `Could not list campaigns from Meta (${e instanceof Error ? e.message : String(e)}) – showing the cached list`;
+      }
+    } else {
+      campaignsWarning = "No Meta connection – showing the cached list";
+    }
+    if (campaignsSource === "cache") {
+      campaigns = (await db
+        .select({ id: schema.campaignsCache.id, name: schema.campaignsCache.name, status: schema.campaignsCache.status, dailyBudget: schema.campaignsCache.dailyBudget, lifetimeBudget: schema.campaignsCache.lifetimeBudget, adAccountId: schema.campaignsCache.adAccountId, createdTime: schema.campaignsCache.createdTime })
+        .from(schema.campaignsCache)
+        .where(inArray(schema.campaignsCache.status, ["ACTIVE", "PAUSED"])))
+        // rows without an account are legacy (written before the column existed): only usable when no account is known
+        .filter((c) => (act ? c.adAccountId === act : true))
+        .map((c) => ({ id: c.id, name: c.name, status: c.status, isCbo: !!(c.dailyBudget || c.lifetimeBudget), dailyBudget: c.dailyBudget, createdTime: c.createdTime }));
+    }
+    // Active first, then newest — the test campaign you want is almost always near the top.
+    campaigns.sort((a, b) => (a.status === b.status ? (b.createdTime?.getTime() ?? 0) - (a.createdTime?.getTime() ?? 0) : a.status === "ACTIVE" ? -1 : 1));
 
     // Guess the product's ABO test campaign by name. "Munhälsa // ABO" must
     // beat "KattMunhälsa // ABO" for the dog product, so a whole-word match
@@ -74,7 +100,8 @@ export async function GET(
       const tokens = words(n);
       let s = 0;
       for (const w of needles) {
-        if (tokens.includes(w)) s += 4;
+        const parts = words(w);
+        if (parts.length && parts.every((p) => tokens.includes(p))) s += 4;
         else if (n.includes(w)) s += 1;
       }
       if (country?.code && tokens.includes(country.code.toLowerCase())) s += 1;
@@ -95,7 +122,9 @@ export async function GET(
     return NextResponse.json({
       product: product ? { id: product.id, name: product.name, code: product.code } : null,
       country: country ? { id: country.id, name: country.name, code: country.code } : null,
-      campaigns,
+      campaigns: campaigns.map((c) => ({ id: c.id, name: c.name, status: c.status, isCbo: c.isCbo, dailyBudget: c.dailyBudget })),
+      campaignsSource,
+      campaignsWarning,
       suggestedCampaignId: suggestedCampaign?.id ?? null,
       adAccountId: act,
       pageId,

@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { db, schema } from "@/db";
 import { eq, and, sql, desc, asc, inArray } from "drizzle-orm";
 import { isElevated } from "@/lib/access";
+import { reconcilePostedAssignments } from "@/lib/assignments/reconcile-posted";
 
 const STATUS_KEYS = [
   "DRAFT",
@@ -38,6 +39,10 @@ export async function GET(request: NextRequest) {
     if (priority) conditions.push(eq(schema.assignments.priority, priority.toLowerCase()));
 
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+    // Cards whose ad set already exists on Meta belong in Posted — move them
+    // before building the board so a launch from a script shows up here too.
+    try { await reconcilePostedAssignments(session.user.id); } catch (e) { console.error("board reconcile failed:", e); }
 
     const assignments = await db
       .select()

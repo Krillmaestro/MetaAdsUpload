@@ -24,7 +24,8 @@ import {
   extractThruplays,
   type InsightData,
 } from "./insights";
-import { getCampaigns } from "./campaigns";
+import { getCampaigns, upsertCampaignsCache } from "./campaigns";
+import { reconcilePostedAssignments } from "@/lib/assignments/reconcile-posted";
 import { getAdSets } from "./adsets";
 import { type Ad } from "./ads";
 import { metaApi, metaApiPaginated, resolveAccount, withAdAccount, getAdAccountId } from "./client";
@@ -336,6 +337,11 @@ export async function runSync(opts: { days?: number; deadline?: number } = {}) {
         console.error(`runSync failed for ${act}:`, e);
       }
     }
+    // Ad sets launched outside the app: their assignments are posted now.
+    try {
+      const r = await reconcilePostedAssignments(null);
+      if (r.posted.length || r.linked.length) results.reconciled = { posted: r.posted.length, linked: r.linked.length };
+    } catch (e) { console.error("reconcile posted assignments failed:", e); }
     // Owner rows show the ad set's current name — refresh from the cache in one statement.
     await db.execute(sql`
       UPDATE adset_owners o SET adset_name = c.name, updated_at = now()
@@ -350,17 +356,8 @@ async function syncOneAccount(adAccountId: string, days: number, deadline: numbe
   const today = daysAgo(0);
   const since = daysAgo(days);
 
-  // 1. Campaign metadata
-  const campaigns = await getCampaigns();
-  for (const chunk of chunks(campaigns)) {
-    await db.insert(schema.campaignsCache).values(chunk.map((c) => ({
-      id: c.id, adAccountId, name: c.name, status: c.status, objective: c.objective,
-      dailyBudget: c.daily_budget ? parseFloat(c.daily_budget) / 100 : null,
-    }))).onConflictDoUpdate({
-      target: schema.campaignsCache.id,
-      set: { ...excludedSet({ name: "name", status: "status", adAccountId: "ad_account_id" }), syncedAt: sql`now()` },
-    });
-  }
+  // 1. Campaign metadata (budgets included — the Upload dialog reads CBO/ABO from here)
+  const campaignCount = await upsertCampaignsCache(adAccountId, await getCampaigns());
 
   // 1b. Ad set metadata → adsets_cache. Best-effort: a failure here must not stop the insights.
   let adsetCount = 0;
@@ -427,7 +424,7 @@ async function syncOneAccount(adAccountId: string, days: number, deadline: numbe
   }
 
   return {
-    campaigns: campaigns.length,
+    campaigns: campaignCount,
     adsets: adsetCount,
     ads: ads.length,
     campaignInsightRows: campaignRows.length,

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
-import { getCampaigns, createCampaign, updateCampaign } from "@/lib/meta/campaigns";
-import { withAccount, withAdAccount } from "@/lib/meta/client";
+import { getCampaigns, createCampaign, updateCampaign, upsertCampaignsCache } from "@/lib/meta/campaigns";
+import { withAccount, withAdAccount, getAdAccountId } from "@/lib/meta/client";
 import { db, schema } from "@/db";
 import { eq } from "drizzle-orm";
 import { isElevated } from "@/lib/access";
@@ -32,37 +32,14 @@ export async function GET(request: NextRequest) {
       request.nextUrl.searchParams.get("connectionId"),
       request.nextUrl.searchParams.get("adAccountId")
     );
-    const campaigns = await run(() => getCampaigns());
-
-    // Update cache
-    for (const c of campaigns) {
-      await db
-        .insert(schema.campaignsCache)
-        .values({
-          id: c.id,
-          name: c.name,
-          status: c.status,
-          objective: c.objective,
-          dailyBudget: c.daily_budget ? parseFloat(c.daily_budget) / 100 : null,
-          lifetimeBudget: c.lifetime_budget ? parseFloat(c.lifetime_budget) / 100 : null,
-          budgetRemaining: c.budget_remaining ? parseFloat(c.budget_remaining) / 100 : null,
-          buyingType: c.buying_type,
-          startTime: c.start_time ? new Date(c.start_time) : null,
-          stopTime: c.stop_time ? new Date(c.stop_time) : null,
-          createdTime: c.created_time ? new Date(c.created_time) : null,
-          updatedTime: c.updated_time ? new Date(c.updated_time) : null,
-        })
-        .onConflictDoUpdate({
-          target: schema.campaignsCache.id,
-          set: {
-            name: c.name,
-            status: c.status,
-            objective: c.objective,
-            dailyBudget: c.daily_budget ? parseFloat(c.daily_budget) / 100 : null,
-            syncedAt: new Date(),
-          },
-        });
-    }
+    // Fetch and cache inside the same scope, so the rows are stamped with the
+    // account they belong to (a row without ad_account_id never shows up in
+    // the Upload-to-Meta dialog, which filters on the template's account).
+    const campaigns = await run(async () => {
+      const list = await getCampaigns();
+      await upsertCampaignsCache(await getAdAccountId(), list);
+      return list;
+    });
 
     return NextResponse.json({ data: campaigns });
   } catch (error) {
