@@ -1,5 +1,6 @@
 import { db, schema } from "@/db";
 import { desc, gte } from "drizzle-orm";
+import { DEMAND_PLAN, addDays, cumulativeDemand, stockoutDay } from "./plan";
 
 export type ProductForecast = {
   id: string;
@@ -15,7 +16,7 @@ export type ProductForecast = {
   unitCost: number | null;
   isActive: boolean;
 
-  velocity: number;      // units per day on the chosen basis
+  velocity: number;      // normal units per day: the chosen basis, or the last week if faster
   v7: number;
   v14: number;
   v30: number;
@@ -24,13 +25,20 @@ export type ProductForecast = {
 
   countUnits: number | null;
   countedOn: string | null;
-  soldSinceCount: number;
+  countedAt: string | null;
+  countSource: string | null;
+  soldSinceCount: number;   // shipped after an exact count, sold after a day-level one
   receivedSinceCount: number;
-  stock: number | null;
+  stock: number | null;     // physically on the shelf
+  openUnits: number;        // reserved by orders not shipped yet
+  available: number | null; // stock minus reserved: what can still be sold
+  trackingSyncedAt: string | null;
 
   incomingUnits: number;
   nextEta: string | null;
 
+  /** cumDemand[n] = expected units over the next n days, campaigns included. */
+  cumDemand: number[];
   daysCover: number | null;
   stockoutOn: string | null;
   reorderPoint: number;
@@ -54,31 +62,39 @@ export type ProductForecast = {
 
 const DAY = 86400_000;
 const iso = (d: Date) => d.toISOString().slice(0, 10);
-const addDays = (from: Date, n: number) => iso(new Date(from.getTime() + n * DAY));
+const stockholmDay = (d: Date) => d.toLocaleDateString("sv-SE", { timeZone: "Europe/Stockholm" });
+const daysBetween = (from: string, to: string) => Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / DAY);
 
 /** Units per day over the last `window` days, counting every day in the window. */
-function velocityOver(sales: Map<string, number>, today: Date, window: number): number {
+function velocityOver(sales: Map<string, number>, today: string, window: number): number {
   let units = 0;
-  for (let i = 1; i <= window; i++) {
-    const day = addDays(today, -i);
-    units += sales.get(day) ?? 0;
-  }
+  for (let i = 1; i <= window; i++) units += sales.get(addDays(today, -i)) ?? 0;
   return units / window;
 }
 
-export async function buildForecast(): Promise<{ products: ProductForecast[]; generatedAt: string; salesFrom: string | null }> {
-  const [products, counts, pos, sales] = await Promise.all([
+type Count = typeof schema.inventoryCounts.$inferSelect;
+/** When a count applies: its exact time, or the end of its day for day-level counts. */
+const countMoment = (c: Count) => c.countedAt?.getTime() ?? Date.parse(`${c.countedOn}T23:59:59Z`);
+
+export async function buildForecast() {
+  const [products, counts, pos, sales, shipments] = await Promise.all([
     db.select().from(schema.inventoryProducts).orderBy(schema.inventoryProducts.sortOrder),
-    db.select().from(schema.inventoryCounts).orderBy(desc(schema.inventoryCounts.countedOn)),
+    db.select().from(schema.inventoryCounts).orderBy(desc(schema.inventoryCounts.createdAt)),
     db.select().from(schema.inventoryPurchaseOrders).orderBy(desc(schema.inventoryPurchaseOrders.orderedOn)),
     db
       .select()
       .from(schema.inventorySalesDaily)
       .where(gte(schema.inventorySalesDaily.soldOn, iso(new Date(Date.now() - 120 * DAY)))),
+    db
+      .select({
+        productId: schema.inventoryShipments.productId,
+        units: schema.inventoryShipments.units,
+        shippedAt: schema.inventoryShipments.shippedAt,
+      })
+      .from(schema.inventoryShipments),
   ]);
 
-  const today = new Date();
-  const todayStr = iso(today);
+  const todayStr = iso(new Date());
   const byProduct = new Map<string, Map<string, number>>();
   for (const row of sales) {
     const m = byProduct.get(row.productId) ?? new Map<string, number>();
@@ -88,52 +104,68 @@ export async function buildForecast(): Promise<{ products: ProductForecast[]; ge
 
   const out: ProductForecast[] = products.map((p) => {
     const s = byProduct.get(p.id) ?? new Map<string, number>();
-    const v7 = velocityOver(s, today, 7);
-    const v14 = velocityOver(s, today, 14);
-    const v30 = velocityOver(s, today, 30);
-    const v60 = velocityOver(s, today, 60);
+    const v7 = velocityOver(s, todayStr, 7);
+    const v14 = velocityOver(s, todayStr, 14);
+    const v30 = velocityOver(s, todayStr, 30);
+    const v60 = velocityOver(s, todayStr, 60);
     const basis = p.velocityBasisDays;
-    const velocity = basis <= 7 ? v7 : basis <= 14 ? v14 : basis <= 30 ? v30 : v60;
+    const basisRate = basis <= 7 ? v7 : basis <= 14 ? v14 : basis <= 30 ? v30 : v60;
+    // Plan on the faster of the basis and the last week, so a growing or newly launched
+    // product is not sized on a month that barely included it.
+    const velocity = Math.max(basisRate, v7);
 
-    // Newest count is the anchor; sales strictly after that day are subtracted.
-    const count = counts.find((c) => c.productId === p.id) ?? null;
+    const count = counts.filter((c) => c.productId === p.id).sort((a, b) => countMoment(b) - countMoment(a))[0] ?? null;
     let soldSinceCount = 0;
     let receivedSinceCount = 0;
     let stock: number | null = null;
     if (count) {
-      for (const [day, units] of s) if (day > count.countedOn) soldSinceCount += units;
+      const exact = count.countedAt;
+      const anchorDay = exact ? stockholmDay(exact) : count.countedOn;
+      if (exact) {
+        for (const row of shipments) if (row.productId === p.id && row.shippedAt > exact) soldSinceCount += row.units;
+      } else {
+        for (const [day, units] of s) if (day > count.countedOn) soldSinceCount += units;
+      }
+      const anchorTime = exact ?? count.createdAt;
       for (const po of pos) {
         if (po.productId !== p.id || !po.receivedOn) continue;
-        // Dates have day resolution, so a delivery booked in on the same day as the
-        // count is decided by the clock: it only adds if it was booked after the count.
-        const after =
-          po.receivedOn > count.countedOn ||
-          (po.receivedOn === count.countedOn && po.updatedAt > count.createdAt);
-        if (after) receivedSinceCount += po.units;
+        // Dates have day resolution, so a delivery booked on the anchor day is decided by the clock.
+        if (po.receivedOn > anchorDay || (po.receivedOn === anchorDay && po.updatedAt > anchorTime)) receivedSinceCount += po.units;
       }
       stock = count.units - soldSinceCount + receivedSinceCount;
     }
+    // Reserved units only apply to an exact, tracked stock figure.
+    const openUnits = count?.countedAt ? p.openUnits : 0;
+    const available = stock === null ? null : stock - openUnits;
 
     const open = pos.filter((po) => po.productId === p.id && po.status === "ordered" && !po.receivedOn);
     const incomingUnits = open.reduce((n, po) => n + po.units, 0);
     const etas = open.map((po) => po.etaOn).filter((d): d is string => !!d).sort();
     const nextEta = etas[0] ?? null;
+    const arrivals = open.map((po) => ({
+      day: Math.max(0, po.etaOn ? daysBetween(todayStr, po.etaOn) : p.leadTimeMaxDays),
+      units: po.units,
+    }));
 
-    const reorderPoint = Math.round(velocity * (p.leadTimeMaxDays + p.safetyDays));
-    const daysCover = stock !== null && velocity > 0 ? stock / velocity : null;
-    const stockoutOn = daysCover !== null ? addDays(today, Math.floor(daysCover)) : null;
-    const orderInDays = stock !== null && velocity > 0 ? (stock - reorderPoint) / velocity : null;
-    const orderByOn = orderInDays !== null ? addDays(today, Math.floor(orderInDays)) : null;
+    const cumDemand = cumulativeDemand(p.code, velocity, todayStr);
+    const at = (n: number) => cumDemand[Math.min(n, cumDemand.length - 1)];
+    const reorderPoint = Math.round(at(p.leadTimeMaxDays + p.safetyDays));
+
+    const canPlan = available !== null && velocity > 0;
+    const runout = canPlan ? stockoutDay(cumDemand, available, arrivals) : null;
+    const daysCover = canPlan ? (runout ?? cumDemand.length - 1) : null;
+    const stockoutOn = runout !== null ? addDays(todayStr, runout) : null;
+    const orderInDays = runout !== null ? runout - p.leadTimeMaxDays - p.safetyDays : null;
+    const orderByOn = orderInDays !== null ? addDays(todayStr, orderInDays) : null;
 
     // Cover the lead time plus the period you want on the shelf, minus what you have
     // and what is already on its way.
-    const rawSuggested = velocity * (p.targetCoverDays + p.leadTimeMaxDays) - (stock ?? 0) - incomingUnits;
+    const rawSuggested = at(p.targetCoverDays + p.leadTimeMaxDays) - (available ?? 0) - incomingUnits;
     let suggestedUnits = Math.max(0, Math.ceil(rawSuggested));
     if (p.moq > 0 && suggestedUnits > 0) suggestedUnits = Math.ceil(suggestedUnits / p.moq) * p.moq;
 
-    const afterOrder = (stock ?? 0) + incomingUnits + suggestedUnits;
-    const suggestedCoversDays = velocity > 0 && suggestedUnits > 0 ? afterOrder / velocity : null;
-    const suggestedUntil = suggestedCoversDays !== null ? addDays(today, Math.floor(suggestedCoversDays)) : null;
+    const afterOrder = (available ?? 0) + incomingUnits + suggestedUnits;
+    const coversDay = velocity > 0 && suggestedUnits > 0 ? (stockoutDay(cumDemand, afterOrder) ?? cumDemand.length - 1) : null;
     const pace: ProductForecast["pace"] =
       v30 <= 0 ? "steady" : v7 > v30 * 1.15 ? "rising" : v7 < v30 * 0.6 ? "falling" : "steady";
 
@@ -146,7 +178,7 @@ export async function buildForecast(): Promise<{ products: ProductForecast[]; ge
 
     const salesDays: { date: string; units: number }[] = [];
     for (let i = 29; i >= 0; i--) {
-      const day = addDays(today, -i);
+      const day = addDays(todayStr, -i);
       salesDays.push({ date: day, units: s.get(day) ?? 0 });
     }
 
@@ -158,12 +190,15 @@ export async function buildForecast(): Promise<{ products: ProductForecast[]; ge
       velocity, v7, v14, v30, v60,
       trend: v30 > 0 ? v7 / v30 - 1 : null,
       countUnits: count?.units ?? null, countedOn: count?.countedOn ?? null,
-      soldSinceCount, receivedSinceCount, stock,
+      countedAt: count?.countedAt?.toISOString() ?? null, countSource: count?.source ?? null,
+      soldSinceCount, receivedSinceCount, stock, openUnits, available,
+      trackingSyncedAt: p.trackingSyncedAt?.toISOString() ?? null,
       incomingUnits, nextEta,
+      cumDemand: cumDemand.map((n) => Math.round(n)),
       daysCover, stockoutOn, reorderPoint, orderInDays, orderByOn,
       suggestedUnits,
       suggestedCost: p.unitCost ? Math.round(suggestedUnits * p.unitCost) : null,
-      suggestedCoversDays, suggestedUntil, pace,
+      suggestedCoversDays: coversDay, suggestedUntil: coversDay !== null ? addDays(todayStr, coversDay) : null, pace,
       status, salesDays,
       shopifyVariantId: p.shopifyVariantId, shopifyInventoryItemId: p.shopifyInventoryItemId,
       shopifyLocationId: p.shopifyLocationId,
@@ -173,5 +208,10 @@ export async function buildForecast(): Promise<{ products: ProductForecast[]; ge
   });
 
   const allDays = sales.map((r) => r.soldOn).sort();
-  return { products: out, generatedAt: todayStr, salesFrom: allDays[0] ?? null };
+  return {
+    products: out,
+    generatedAt: todayStr,
+    salesFrom: allDays[0] ?? null,
+    demandPlan: DEMAND_PLAN.filter((w) => w.to >= todayStr && !w.codes),
+  };
 }

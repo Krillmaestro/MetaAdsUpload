@@ -30,7 +30,8 @@ export const DEFAULT_CATALOG: CatalogSeed[] = [
   { code: "SC", name: "Skin & Coat", matchSkus: ["6"], matchTitles: ["skin & coat"], unitLabel: "burkar", sortOrder: 50 },
   { code: "LT", name: "Ledtillskott", matchSkus: ["4"], matchTitles: ["ledtillskott"], unitLabel: "burkar", sortOrder: 60 },
   { code: "BEL", name: "Belöningsbitar+ Kalkon (gåva)", matchSkus: ["8", "8B"], matchTitles: ["belöningsbitar"], unitLabel: "påsar", sortOrder: 70 },
-  { code: "FB", name: "FingerBorste (gåva)", matchSkus: ["9-1", "9-3", "9-4"], matchTitles: ["fingerborste"], unitLabel: "st", sortOrder: 80 },
+  { code: "LED", name: "LED-lampa (gåva)", matchSkus: ["LED01"], matchTitles: ["led-lampa", "ledlampa"], unitLabel: "st", sortOrder: 75 },
+  { code: "FB", name: "FingerBorste (gåva)", matchSkus: ["9-1", "9-2", "9-3", "9-4"], matchTitles: ["fingerborste"], unitLabel: "st", sortOrder: 80 },
   { code: "TSK", name: "Tandstensskrapa (gåva)", matchSkus: ["10"], matchTitles: ["tandstensskrapa"], unitLabel: "st", sortOrder: 90 },
 ];
 
@@ -78,12 +79,16 @@ export function matchLineItem(
   return null;
 }
 
-/** Create the default catalogue once, so the page is never empty on first visit. */
+/** Add any catalogue product that is missing, so new articles appear by themselves. */
 export async function ensureCatalog(): Promise<MatchableProduct[]> {
   const existing = await db.select().from(schema.inventoryProducts);
-  if (existing.length === 0) {
-    await db.insert(schema.inventoryProducts).values(
-      DEFAULT_CATALOG.map((c) => ({
+  const known = new Set(existing.map((p) => p.code));
+  const missing = DEFAULT_CATALOG.filter((c) => !known.has(c.code));
+  if (missing.length === 0) return existing.map(toMatchable);
+  await db
+    .insert(schema.inventoryProducts)
+    .values(
+      missing.map((c) => ({
         name: c.name,
         code: c.code,
         matchSkus: c.matchSkus,
@@ -91,11 +96,10 @@ export async function ensureCatalog(): Promise<MatchableProduct[]> {
         unitLabel: c.unitLabel,
         sortOrder: c.sortOrder,
       }))
-    );
-    const seeded = await db.select().from(schema.inventoryProducts);
-    return seeded.map(toMatchable);
-  }
-  return existing.map(toMatchable);
+    )
+    .onConflictDoNothing();
+  const seeded = await db.select().from(schema.inventoryProducts);
+  return seeded.map(toMatchable);
 }
 
 function toMatchable(p: typeof schema.inventoryProducts.$inferSelect): MatchableProduct {

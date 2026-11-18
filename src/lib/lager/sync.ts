@@ -15,13 +15,13 @@ type ShopifyOrder = {
 /** Vercel env values can carry invisible trailing characters — always trim. */
 const env = (key: string) => (process.env[key] ?? "").trim();
 
-function getStore(): string {
+export function getStore(): string {
   const store = env("SHOPIFY_STORE");
   if (!store) throw new Error("SHOPIFY_STORE saknas");
   return store;
 }
 
-async function getAccessToken(): Promise<string> {
+export async function getAccessToken(): Promise<string> {
   const permanent = env("SHOPIFY_ACCESS_TOKEN");
   if (permanent) return permanent;
   const clientId = env("SHOPIFY_CLIENT_ID");

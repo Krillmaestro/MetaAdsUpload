@@ -9,8 +9,10 @@ type Forecast = {
   leadTimeMinDays: number; leadTimeMaxDays: number; safetyDays: number;
   targetCoverDays: number; velocityBasisDays: number; moq: number; unitCost: number | null; isActive: boolean;
   velocity: number; v7: number; v14: number; v30: number; v60: number; trend: number | null;
-  countUnits: number | null; countedOn: string | null; soldSinceCount: number; receivedSinceCount: number; stock: number | null;
-  incomingUnits: number; nextEta: string | null;
+  countUnits: number | null; countedOn: string | null; countedAt: string | null; countSource: string | null;
+  soldSinceCount: number; receivedSinceCount: number; stock: number | null;
+  openUnits: number; available: number | null; trackingSyncedAt: string | null;
+  incomingUnits: number; nextEta: string | null; cumDemand: number[];
   daysCover: number | null; stockoutOn: string | null; reorderPoint: number;
   orderInDays: number | null; orderByOn: string | null; suggestedUnits: number; suggestedCost: number | null;
   suggestedCoversDays: number | null; suggestedUntil: string | null; pace: "rising" | "falling" | "steady";
@@ -23,7 +25,11 @@ type PurchaseOrder = {
   id: string; productId: string; units: number; orderedOn: string;
   etaOn: string | null; receivedOn: string | null; status: string; note: string | null;
 };
-type Payload = { products: Forecast[]; generatedAt: string; salesFrom: string | null; purchaseOrders: PurchaseOrder[] };
+type DemandWindow = { from: string; to: string; factor: number; label: string };
+type Payload = {
+  products: Forecast[]; generatedAt: string; salesFrom: string | null; purchaseOrders: PurchaseOrder[];
+  demandPlan: DemandWindow[]; trackingError: string | null;
+};
 type ScopeState = { scopes: string[]; canRead: boolean; canWrite: boolean; missing: string[] };
 type Variant = {
   productTitle: string; variantTitle: string | null; sku: string | null;
@@ -33,6 +39,8 @@ type Variant = {
 const nf = (n: number, d = 0) => n.toLocaleString("sv-SE", { minimumFractionDigits: d, maximumFractionDigits: d });
 const dateSv = (s: string | null) =>
   s ? new Date(s + "T00:00:00").toLocaleDateString("sv-SE", { day: "numeric", month: "short" }) : "–";
+const timeSv = (s: string | null) =>
+  s ? new Date(s).toLocaleString("sv-SE", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "–";
 /** Move an ISO date forward by n days without touching the clock. */
 const shiftDays = (isoDate: string, n: number) => {
   const d = new Date(isoDate + "T00:00:00");
@@ -59,19 +67,25 @@ function packLabel(units: number, step: number) {
 const daysUntil = (isoDate: string) =>
   Math.round((new Date(isoDate + "T00:00:00").getTime() - new Date(new Date().toISOString().slice(0, 10) + "T00:00:00").getTime()) / 86400000);
 
+/** How long a given supply lasts on the expected demand, campaigns included. */
+function coverFor(p: Forecast, supply: number) {
+  if (p.velocity <= 0) return { days: null, until: null };
+  const hit = p.cumDemand.findIndex((n) => n > supply);
+  const days = hit === -1 ? p.cumDemand.length - 1 : Math.max(0, hit - 1);
+  return { days, until: shiftDays(new Date().toISOString().slice(0, 10), days) };
+}
+
 /**
  * Recompute the suggestion for a different coverage period without a round trip,
  * using the same formula as the server: cover the lead time plus the chosen period,
- * minus what is on the shelf and what is already on its way.
+ * minus what can still be sold and what is already on its way.
  */
 function suggestFor(p: Forecast, coverDays: number) {
-  const raw = p.velocity * (coverDays + p.leadTimeMaxDays) - (p.stock ?? 0) - p.incomingUnits;
-  let units = Math.max(0, Math.ceil(raw));
+  const need = p.cumDemand[Math.min(coverDays + p.leadTimeMaxDays, p.cumDemand.length - 1)] ?? 0;
+  let units = Math.max(0, Math.ceil(need - (p.available ?? 0) - p.incomingUnits));
   if (p.moq > 0 && units > 0) units = Math.ceil(units / p.moq) * p.moq;
-  const after = (p.stock ?? 0) + p.incomingUnits + units;
-  const days = p.velocity > 0 && units > 0 ? after / p.velocity : null;
-  const until = days !== null ? shiftDays(new Date().toISOString().slice(0, 10), Math.floor(days)) : null;
-  return { units, days, until, cost: p.unitCost ? Math.round(units * p.unitCost) : null };
+  const cover = units > 0 ? coverFor(p, (p.available ?? 0) + p.incomingUnits + units) : { days: null, until: null };
+  return { units, ...cover, cost: p.unitCost ? Math.round(units * p.unitCost) : null };
 }
 
 const STATUS: Record<Forecast["status"], { label: string; cls: string; dot: string }> = {
@@ -86,6 +100,7 @@ export default function LagerPage() {
   const [data, setData] = useState<Payload | null>(null);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
   const [tab, setTab] = useState<"count" | "po" | "settings">("count");
@@ -115,6 +130,22 @@ export default function LagerPage() {
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Synk misslyckades");
     } finally { setSyncing(false); }
+  };
+
+  const uploadReport = async (file: File) => {
+    setUploading(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch("/api/lager/report", { method: "POST", body: form });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error || "Kunde inte läsa rapporten");
+      toast.success(`Rapport från ${timeSv(j.createdAt)} inläst · ${j.products} produkter`);
+      if (j.unmatched?.length) toast.warning(`Okända rader: ${j.unmatched.slice(0, 3).join(", ")}`);
+      await fetchData();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Kunde inte läsa rapporten");
+    } finally { setUploading(false); }
   };
 
   const save = async (payload: Record<string, unknown>) => {
@@ -174,6 +205,8 @@ export default function LagerPage() {
   const products = useMemo(() => (data?.products ?? []).filter((p) => p.isActive), [data]);
   const alerts = products.filter((p) => p.status === "order_now" || p.status === "soon");
   const openPos = (data?.purchaseOrders ?? []).filter((po) => po.status === "ordered" && !po.receivedOn);
+  const reportAt = products.map((p) => (p.countSource === "konsido" ? p.countedAt : null)).filter(Boolean).sort().pop() ?? null;
+  const trackedAt = products.map((p) => p.trackingSyncedAt).filter(Boolean).sort().pop() ?? null;
 
   if (loading) {
     return <div className="flex items-center justify-center h-96"><div className="animate-spin rounded-full h-10 w-10 border-2 border-cyan-500 border-t-transparent" /></div>;
@@ -185,15 +218,34 @@ export default function LagerPage() {
         <div>
           <h1 className="text-2xl font-bold text-white flex items-center gap-2"><PackageSearch className="h-6 w-6 text-cyan-400" /> Lager</h1>
           <p className="text-sm text-slate-500 mt-0.5">
-            Förbrukning från Shopify, saldo du räknar själv, och datumet du senast kan lägga ordern med 4–6 veckors leveranstid.
-            {data?.salesFrom && <> Försäljning från {dateSv(data.salesFrom)}.</>}
+            Saldot utgår från Konsidos rapport på minuten, minus allt som skickats efter den och det som ligger i öppna ordrar.
+            {reportAt ? <> Rapport {timeSv(reportAt)} · spårat till {timeSv(trackedAt)}.</> : <> Läs in en rapport för att starta spårningen.</>}
           </p>
         </div>
-        <button onClick={sync} disabled={syncing}
-          className="px-4 py-2 rounded-lg bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 hover:bg-cyan-500/20 transition-all flex items-center gap-2 disabled:opacity-50">
-          <RefreshCw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} /> {syncing ? "Synkar…" : "Synka försäljning"}
-        </button>
+        <div className="flex items-center gap-2">
+          <label className={`px-4 py-2 rounded-lg border border-white/10 text-slate-300 hover:bg-white/[0.03] transition-all flex items-center gap-2 cursor-pointer ${uploading ? "opacity-50 pointer-events-none" : ""}`}>
+            <Upload className="h-4 w-4" /> {uploading ? "Läser…" : "Läs in lagerrapport"}
+            <input type="file" accept="application/pdf" className="hidden"
+              onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) uploadReport(f); }} />
+          </label>
+          <button onClick={sync} disabled={syncing}
+            className="px-4 py-2 rounded-lg bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 hover:bg-cyan-500/20 transition-all flex items-center gap-2 disabled:opacity-50">
+            <RefreshCw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} /> {syncing ? "Synkar…" : "Synka"}
+          </button>
+        </div>
       </div>
+
+      {data?.trackingError && (
+        <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-300">
+          Spårningen kunde inte uppdateras just nu, saldot gäller från senaste synken. {data.trackingError}
+        </div>
+      )}
+
+      {(data?.demandPlan?.length ?? 0) > 0 && (
+        <div className="rounded-xl border border-white/5 bg-[#111827] p-3 text-xs text-slate-400">
+          Planen räknar med {data!.demandPlan.map((w) => `${w.label} ×${nf(w.factor, 2)} (${dateSv(w.from)}–${dateSv(w.to)})`).join(" · ")}.
+        </div>
+      )}
 
       {error && (
         <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-4 flex items-center gap-3">
@@ -215,7 +267,7 @@ export default function LagerPage() {
                 <div className="min-w-[200px]">
                   <div className="text-sm font-medium text-white">{p.name}</div>
                   <div className="text-xs text-slate-500">
-                    {p.stock !== null ? `${nf(p.stock)} ${p.unitLabel} kvar` : "saldo saknas"} · {nf(p.velocity, 1)} {p.unitLabel}/dag
+                    {p.available !== null ? `${nf(p.available)} ${p.unitLabel} kvar att sälja` : "saldo saknas"} · {nf(p.velocity, 1)} {p.unitLabel}/dag
                   </div>
                 </div>
                 <div className="text-sm text-slate-300">
@@ -228,11 +280,9 @@ export default function LagerPage() {
                   const step = p.moq > 0 ? p.moq : 0;
                   const extra = (extraSteps[p.id] ?? 0) * step;
                   const units = Math.max(0, base.units + extra);
-                  const after = (p.stock ?? 0) + p.incomingUnits + units;
                   const sug = {
                     units,
-                    days: p.velocity > 0 && units > 0 ? after / p.velocity : null,
-                    until: p.velocity > 0 && units > 0 ? shiftDays(new Date().toISOString().slice(0, 10), Math.floor(after / p.velocity)) : null,
+                    ...(units > 0 ? coverFor(p, (p.available ?? 0) + p.incomingUnits + units) : { days: null, until: null }),
                     cost: p.unitCost ? Math.round(units * p.unitCost) : null,
                   };
                   const dirty = cover !== p.targetCoverDays;
@@ -369,7 +419,8 @@ export default function LagerPage() {
             <thead>
               <tr className="border-b border-white/5">
                 <th className="text-left text-[10px] text-slate-500 uppercase tracking-wider px-4 py-2">Produkt</th>
-                <th className="text-right text-[10px] text-slate-500 uppercase tracking-wider px-4 py-2">Saldo</th>
+                <th className="text-right text-[10px] text-slate-500 uppercase tracking-wider px-4 py-2">Fysiskt</th>
+                <th className="text-right text-[10px] text-slate-500 uppercase tracking-wider px-4 py-2">Kvar att sälja</th>
                 <th className="text-right text-[10px] text-slate-500 uppercase tracking-wider px-4 py-2">Per dag</th>
                 <th className="text-right text-[10px] text-slate-500 uppercase tracking-wider px-4 py-2">7d / 30d</th>
                 <th className="text-right text-[10px] text-slate-500 uppercase tracking-wider px-4 py-2">Räcker</th>
@@ -388,7 +439,9 @@ export default function LagerPage() {
                   <td className="px-4 py-2.5">
                     <div className="text-sm text-white">{p.name}</div>
                     <div className="text-[11px] text-slate-600">
-                      {p.countedOn ? `räknat ${dateSv(p.countedOn)}: ${nf(p.countUnits ?? 0)} − ${nf(p.soldSinceCount)} sålda${p.receivedSinceCount ? ` + ${nf(p.receivedSinceCount)} mottagna` : ""}` : "inget saldo registrerat"}
+                      {p.countedAt
+                        ? `${p.countSource === "konsido" ? "rapport" : "räknat"} ${timeSv(p.countedAt)}: ${nf(p.countUnits ?? 0)} − ${nf(p.soldSinceCount)} skickade${p.receivedSinceCount ? ` + ${nf(p.receivedSinceCount)} mottagna` : ""}`
+                        : p.countedOn ? `räknat ${dateSv(p.countedOn)}: ${nf(p.countUnits ?? 0)} − ${nf(p.soldSinceCount)} sålda${p.receivedSinceCount ? ` + ${nf(p.receivedSinceCount)} mottagna` : ""}` : "inget saldo registrerat"}
                     </div>
                     {p.pace === "rising" && (
                       <div className="text-[10px] text-amber-400 mt-0.5">
@@ -401,7 +454,11 @@ export default function LagerPage() {
                       </div>
                     )}
                   </td>
-                  <td className="px-4 py-2.5 text-right tabular-nums text-white">{p.stock !== null ? nf(p.stock) : "–"}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums text-slate-300">{p.stock !== null ? nf(p.stock) : "–"}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums text-white">
+                    {p.available !== null ? nf(p.available) : "–"}
+                    {p.openUnits > 0 && p.countedAt && <div className="text-[10px] text-slate-600">{nf(p.openUnits)} i öppna ordrar</div>}
+                  </td>
                   <td className="px-4 py-2.5 text-right tabular-nums text-slate-300">{nf(p.velocity, 1)}</td>
                   <td className="px-4 py-2.5 text-right tabular-nums text-slate-400 text-xs">
                     {nf(p.v7, 1)} / {nf(p.v30, 1)}
@@ -433,7 +490,7 @@ export default function LagerPage() {
                 </tr>
               ))}
               {products.length === 0 && (
-                <tr><td colSpan={11} className="px-4 py-8 text-center text-sm text-slate-500">Inga produkter ännu. Kör &quot;Synka försäljning&quot; för att fylla listan.</td></tr>
+                <tr><td colSpan={13} className="px-4 py-8 text-center text-sm text-slate-500">Inga produkter ännu. Kör &quot;Synka försäljning&quot; för att fylla listan.</td></tr>
               )}
             </tbody>
           </table>
@@ -524,7 +581,7 @@ export default function LagerPage() {
                         <div className="text-[10px] text-amber-400 mt-1">Varianten spårar inte lager i Shopify — slå på &quot;Spåra kvantitet&quot; på produkten.</div>
                       )}
                     </td>
-                    <td className="px-4 py-2.5 text-right tabular-nums text-white">{p.stock !== null ? nf(p.stock) : "–"}</td>
+                    <td className="px-4 py-2.5 text-right tabular-nums text-white">{p.available !== null ? nf(p.available) : "–"}</td>
                     <td className="px-4 py-2.5 text-right tabular-nums text-slate-400 text-xs">
                       {p.shopifyLastPushedUnits !== null ? nf(p.shopifyLastPushedUnits) : "–"}
                       {p.shopifySyncedAt && <div className="text-[10px] text-slate-600">{new Date(p.shopifySyncedAt).toLocaleString("sv-SE", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</div>}
@@ -542,9 +599,9 @@ export default function LagerPage() {
           </table>
         </div>
         <div className="p-3 border-t border-white/5 text-[11px] text-slate-600">
-          Förslaget täcker leveranstiden plus den period du valt per produkt, minus det du har och det som är på väg, och rundas upp till närmaste
-          hela steg — en pall rymmer 1 536 burkar och delas bara i tre, så 512 är minsta beställningsbara mängd.
-          Kolumnen &quot;Räcker till&quot; är datumet lagret tar slut om du lägger ordern i dag och förbrukningen står still.
+          Förslaget täcker leveranstiden plus den period du valt per produkt, kampanjerna medräknade, minus det som finns kvar att sälja och det som är på väg.
+          Det rundas upp till närmaste hela steg — en pall rymmer 1 536 burkar och delas bara i tre, så 512 är minsta beställningsbara mängd.
+          Dagstakten är det högsta av valt snitt och senaste veckan. &quot;Räcker till&quot; är datumet lagret tar slut om ordern läggs i dag.
         </div>
         <div className="p-3 border-t border-white/5 text-[11px] text-slate-600">
           Flera Shopify-listningar kan sälja mot samma fysiska lager — koppla bara den variant som faktiskt spårar kvantitet.
@@ -628,7 +685,7 @@ function CountForm({ product, onSave }: { product: Forecast; onSave: (p: Record<
   return (
     <div className="space-y-3">
       <p className="text-xs text-slate-500">
-        Ange saldot som det är när du räknar. Försäljning efter det datumet dras av automatiskt, och mottagna ordrar läggs till.
+        Ange saldot som det är när du räknar. Det som skickas efteråt dras av automatiskt, och mottagna ordrar läggs till.
       </p>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div><label className={labelCls}>Antal {product.unitLabel}</label>
@@ -650,7 +707,7 @@ function PoForm({ product, onSave, presetUnits }: { product: Forecast; onSave: (
   return (
     <div className="space-y-3">
       <p className="text-xs text-slate-500">
-        Förslaget täcker {product.targetCoverDays} dagars försäljning plus leveranstiden, minus det du har och det som redan är på väg.
+        Förslaget täcker {product.targetCoverDays} dagars försäljning plus leveranstiden, minus det som finns kvar att sälja och det som redan är på väg.
       </p>
       <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
         <div><label className={labelCls}>Antal {product.unitLabel}</label>

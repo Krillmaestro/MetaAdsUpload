@@ -1098,6 +1098,9 @@ export const inventoryProducts = pgTable("inventory_products", {
   shopifyLocationId: text("shopify_location_id"),
   shopifySyncedAt: timestamp("shopify_synced_at"),
   shopifyLastPushedUnits: integer("shopify_last_pushed_units"),
+  // Units reserved by open, unshipped orders, refreshed by the tracking sync.
+  openUnits: integer("open_units").notNull().default(0),
+  trackingSyncedAt: timestamp("tracking_synced_at", { withTimezone: true }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => [
@@ -1122,13 +1125,30 @@ export const inventoryCounts = pgTable("inventory_counts", {
   id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
   productId: text("product_id").notNull(),
   countedOn: date("counted_on").notNull(),
+  // Exact moment of the count. Set for warehouse reports, so shipments can be cut at the minute.
+  countedAt: timestamp("counted_at", { withTimezone: true }),
   units: integer("units").notNull(),
-  source: text("source").notNull().default("manual"), // manual | shopify
+  source: text("source").notNull().default("manual"), // manual | shopify | konsido
   note: text("note"),
   createdByName: text("created_by_name"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => [
   index("inventory_counts_product_idx").on(table.productId, table.countedOn),
+]);
+
+// Our own ledger of goods leaving the warehouse, one row per fulfilled line.
+export const inventoryShipments = pgTable("inventory_shipments", {
+  id: serial("id").primaryKey(),
+  productId: text("product_id").notNull(),
+  shopifyOrderId: text("shopify_order_id").notNull(),
+  fulfillmentId: text("fulfillment_id").notNull(),
+  lineItemId: text("line_item_id").notNull(),
+  units: integer("units").notNull(),
+  shippedAt: timestamp("shipped_at", { withTimezone: true }).notNull(),
+  syncedAt: timestamp("synced_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("inventory_shipments_key_idx").on(table.fulfillmentId, table.lineItemId, table.productId),
+  index("inventory_shipments_product_idx").on(table.productId, table.shippedAt),
 ]);
 
 export const inventoryPurchaseOrders = pgTable("inventory_purchase_orders", {

@@ -32,7 +32,11 @@ export async function POST(request: Request) {
       }
       const [row] = await db
         .insert(schema.inventoryCounts)
-        .values({ productId, units: Math.round(units), countedOn, note: body.note ?? null, createdByName: who })
+        .values({
+          productId, units: Math.round(units), countedOn, note: body.note ?? null, createdByName: who,
+          // A count made today is exact to the minute; a back-dated one only to the day.
+          countedAt: countedOn === new Date().toISOString().slice(0, 10) ? new Date() : null,
+        })
         .returning();
       return NextResponse.json({ saved: true, count: row });
     }

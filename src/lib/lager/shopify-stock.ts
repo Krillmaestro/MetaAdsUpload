@@ -152,7 +152,8 @@ export async function pushStock(productId: string, who: string | null): Promise<
   const forecast = await buildForecast();
   const row = forecast.products.find((p) => p.id === productId);
   if (!row || row.stock === null) return { ok: false, message: "Saknar räknat saldo — kan inte pusha" };
-  const units = Math.max(0, Math.round(row.stock));
+  // Shopify's "available" is already reduced by unshipped orders, so send the same figure.
+  const units = Math.max(0, Math.round(row.available ?? row.stock));
 
   try {
     const { token } = await tokenAndScopes();

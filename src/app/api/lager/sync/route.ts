@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { isElevated } from "@/lib/access";
 import { syncSales, syncStockFromShopify } from "@/lib/lager/sync";
+import { syncTracking } from "@/lib/lager/tracking";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -17,8 +18,9 @@ export async function POST(request: Request) {
 
     const sales = await syncSales(days);
     const stock = await syncStockFromShopify();
+    const tracking = await syncTracking();
 
-    return NextResponse.json({ synced: true, ...sales, stock });
+    return NextResponse.json({ synced: true, ...sales, stock, tracking });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Synk misslyckades" },

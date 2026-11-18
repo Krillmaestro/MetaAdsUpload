@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db, schema } from "@/db";
 import { syncSales, syncStockFromShopify } from "@/lib/lager/sync";
+import { syncTracking } from "@/lib/lager/tracking";
 import { checkScopes, pushStock } from "@/lib/lager/shopify-stock";
 
 export const dynamic = "force-dynamic";
@@ -23,6 +24,7 @@ export async function GET(request: NextRequest) {
   try {
     const sales = await syncSales(60);
     const stock = await syncStockFromShopify();
+    const tracking = await syncTracking();
 
     // Push the freshly recalculated stock to Shopify, but only for products that are
     // linked and actually have a count behind them. Silent no-op until the scopes exist.
@@ -37,7 +39,7 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ ok: true, ...sales, stock, pushedToShopify: pushed });
+    return NextResponse.json({ ok: true, ...sales, stock, tracking, pushedToShopify: pushed });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Sync failed" },
